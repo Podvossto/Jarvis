@@ -14,6 +14,9 @@ Roamies is licensed under [AGPL-3.0](LICENSE). It builds on the components below
 | [Natural Earth](https://www.naturalearthdata.com) 1:110m countries | country outlines for map cards (`showcase/roamies/world.js`) and their names (`showcase/tauri/sidecar/countries.mjs`) | Public domain |
 | [NVIDIA Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), [ONNX export by istupakov](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx) | Windows speech model, downloaded at setup, not bundled | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | [parakeet-rs](https://github.com/altunenes/parakeet-rs) 0.4.3 | runs the speech model in the Windows voice helper | MIT OR Apache-2.0 |
+| [Typhoon ASR Real-time](https://huggingface.co/typhoon-ai/typhoon-asr-realtime) by SCB 10X, [ONNX export by wannaphong](https://huggingface.co/wannaphong/typhoon-asr-realtime-onnx) | Thai speech model on Windows and Linux, downloaded when Thai is picked, not bundled | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
+| [openWakeWord](https://github.com/dscripka/openWakeWord) pretrained models (melspectrogram, embedding, hey_jarvis v0.1) | the "Hey Jarvis" wake word on Windows, downloaded when it's turned on, not bundled | [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/): non-commercial use only |
+| [Wayu-Paxa-TTS-Edge](https://huggingface.co/wayu-ai/wayu-paxa-tts-edge) by Wayu AI | optional local Thai voice (`tools/paxa-tts`), downloaded by that server, not bundled | [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/): non-commercial use only |
 
 ## Full dependency list
 

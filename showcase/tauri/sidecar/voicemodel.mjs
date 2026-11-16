@@ -31,6 +31,20 @@ export const TYPHOON = {
   ],
 };
 
+// The wake word on Windows ("Hey Jarvis"): openWakeWord's pretrained hey_jarvis model with its two shared feature
+// models (github.com/dscripka/openWakeWord, release v0.5.1; the models are CC BY-NC-SA 4.0, non-commercial use only).
+// About 3.7 MB, fetched when the wake word is first turned on. Release files can be replaced, so the checksums matter.
+export const WAKE = {
+  id: 'openwakeword-hey-jarvis-0.5.1',
+  base: 'https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/',
+  files: [
+    { name: 'melspectrogram.onnx', size: 1087958, sha256: 'ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f' },
+    { name: 'embedding_model.onnx', size: 1326578, sha256: '70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f' },
+    { name: 'hey_jarvis_v0.1.onnx', size: 1271370, sha256: '94a13cfe60075b132f6a472e7e462e8123ee70861bc3fb58434a73712ee0d2cb' },
+  ],
+};
+export const WAKE_PHRASE = 'Hey Jarvis';
+
 // The language spoken to it picks the model: each hears one language well, and neither hears the other's.
 export const SPEECH_LANGS = [{ id: 'th', name: 'ไทย (Thai)' }, { id: 'en', name: 'English' }];
 export const MODELS = { th: TYPHOON, en: MODEL };

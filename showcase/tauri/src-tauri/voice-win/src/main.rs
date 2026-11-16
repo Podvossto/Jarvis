@@ -19,8 +19,10 @@ mod audio;
 mod ink;
 mod keys;
 mod typhoon;
+mod wake;
 
 use audio::{MicError, Sink, Source};
+use parakeet_rs::ort::environment::Environment;
 use parakeet_rs::{ExecutionConfig, ParakeetTDT, Transcriber};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -54,6 +56,9 @@ pub enum Ev {
     AudioFailed(MicError),
     Text { take: u64, text: String, last: bool },
     EngineFailed(String),
+    /// The wake word was heard (its score, 0 to 1).
+    Wake(f32),
+    WakeFailed(String),
 }
 
 // ---------- transcription (its own thread: loading and reading never stall the hotkey loop) ----------
@@ -99,11 +104,15 @@ fn engine_name(dir: &Path) -> &'static str {
     if typhoon::present(dir) { "typhoon" } else { "parakeet" }
 }
 
-fn load_model(dir: &Path) -> Result<Asr, String> {
+/// ONNX Runtime allows one environment per process: the speech model and the wake word share this one.
+fn onnx_env() -> Result<Environment, String> {
+    parakeet_rs::ort::init().with_name("roamies-voice").build().map_err(|e| e.to_string())
+}
+
+fn load_model(dir: &Path, env: Environment) -> Result<Asr, String> {
     // Half the cores: quick enough to read a minute of speech in a second or two, without starving the PC.
     let threads = thread::available_parallelism().map(|n| n.get() / 2).unwrap_or(2).clamp(1, 8);
     let t0 = Instant::now();
-    let env = parakeet_rs::ort::init().with_name("roamies-voice").build().map_err(|e| e.to_string())?;
     let config = ExecutionConfig::new().with_environment(env).with_intra_threads(threads);
     let mut asr = if typhoon::present(dir) {
         Asr::Typhoon(typhoon::Typhoon::load(dir, &config)?)
@@ -129,10 +138,10 @@ fn transcribe(asr: &mut Asr, audio: Vec<f32>) -> String {
     }
 }
 
-fn spawn_engine(dir: PathBuf, tx: Sender<Ev>) -> (Sender<Job>, thread::JoinHandle<()>) {
+fn spawn_engine(dir: PathBuf, env: Environment, tx: Sender<Ev>) -> (Sender<Job>, thread::JoinHandle<()>) {
     let (jtx, jrx) = mpsc::channel::<Job>();
     let handle = thread::spawn(move || {
-        let mut asr = match load_model(&dir) {
+        let mut asr = match load_model(&dir, env) {
             Ok(a) => a,
             Err(e) => {
                 log(&format!("model failed to load: {e}"));
@@ -166,8 +175,14 @@ enum Phase {
     Holding,
     HandsFree,
     Finishing,
+    /// Waiting for the wake word: the mic is open, nothing is shown and nothing is read.
+    Wake,
 }
 
+// After a take, the wake word waits this long before listening again (the Mac helper's wakeCooldown).
+const WAKE_COOLDOWN: f64 = 2.0;
+// The mic wouldn't open for the wake word, or stopped: try again after this long, without telling anyone.
+const WAKE_RETRY: f64 = 30.0;
 const TAP_LIMIT: f64 = 0.25;
 // A release must last this long to count, so one glitchy frame of key state can't end a session.
 const RELEASE_DEBOUNCE: f64 = 0.09;
@@ -252,10 +267,18 @@ struct Voice {
     ink: ink::Ink,
     tx: Sender<Ev>,
     t0: Instant,
+    // The wake word ("Hey Jarvis"): wanted by the user, held while Roamies itself is talking, the folder its models
+    // are in, the listener (started the first time it's needed) and when it may next listen.
+    env: Option<Environment>,
+    wake_on: bool,
+    wake_hold: bool,
+    wake_dir: Option<PathBuf>,
+    wake: Option<wake::Wake>,
+    wake_after: f64,
 }
 
 impl Voice {
-    fn new(engine: Option<Sender<Job>>, test_audio: Option<PathBuf>, tx: Sender<Ev>) -> Voice {
+    fn new(engine: Option<Sender<Job>>, test_audio: Option<PathBuf>, tx: Sender<Ev>, env: Option<Environment>) -> Voice {
         Voice {
             phase: Phase::Idle,
             chord: keys::mask(&["control".into(), "option".into()]).expect("default chord"),
@@ -286,6 +309,12 @@ impl Voice {
             ink: ink::Ink::default(),
             tx,
             t0: Instant::now(),
+            env,
+            wake_on: false,
+            wake_hold: false,
+            wake_dir: None,
+            wake: None,
+            wake_after: 0.0,
         }
     }
 
@@ -295,8 +324,10 @@ impl Voice {
 
     fn set_chord(&mut self, names: &[String]) {
         let Some(m) = keys::mask(names) else { return log(&format!("ignored chord {names:?}")) };
-        if self.phase != Phase::Idle {
-            self.cancel();
+        match self.phase {
+            Phase::Idle => {}
+            Phase::Wake => self.stop_wake(),
+            _ => self.cancel(),
         }
         self.chord = m;
         self.blocked = true;
@@ -310,6 +341,8 @@ impl Voice {
         self.ink.follow(now);
         match self.phase {
             Phase::Holding | Phase::HandsFree => self.maybe_read(now),
+            // Nothing is read while waiting for the wake word, so the take isn't kept either.
+            Phase::Wake => self.buf.lock().unwrap().clear(),
             Phase::Finishing => {
                 if self.tail_until.is_some_and(|t| now >= t) {
                     self.tail_until = None;
@@ -346,6 +379,17 @@ impl Voice {
             Phase::Idle => {
                 if chord && !prev && !self.blocked {
                     self.arm(now);
+                } else if self.wake_allowed(now) {
+                    self.start_wake(now);
+                }
+            }
+            Phase::Wake => {
+                if chord && !prev && !self.blocked {
+                    // The talk chord works as ever; the mic is already open, so not even the first word is lost.
+                    self.leave_wake();
+                    self.arm(now);
+                } else if !self.wake_on || self.wake_hold {
+                    self.stop_wake();
                 }
             }
             Phase::Armed => {
@@ -411,10 +455,67 @@ impl Voice {
         self.reading = false;
         self.read_len = 0;
         self.heard_len = 0;
-        // Start the mic now so the first word isn't lost (a shortcut cancels it a moment later).
-        if self.engine.is_some() && keys::mic_allowed() {
+        // Start the mic now so the first word isn't lost (a shortcut cancels it a moment later). One left open by
+        // the wake word carries straight on into the take.
+        if self.source.is_some() {
+            self.buf.lock().unwrap().clear();
+            self.floor = NoiseFloor::default();
+        } else if self.engine.is_some() && keys::mic_allowed() {
             self.start_audio();
         }
+    }
+
+    // ---------- the wake word ----------
+
+    fn wake_allowed(&self, now: f64) -> bool {
+        self.wake_on && !self.wake_hold && now >= self.wake_after && self.engine.is_some() && self.env.is_some() && self.wake_dir.as_deref().is_some_and(wake::present) && keys::mic_allowed()
+    }
+
+    /// Open the mic and wait for the phrase. Quiet when it can't: this wasn't asked for just now, so a mic that's
+    /// busy or unplugged is only logged, and tried again later.
+    fn start_wake(&mut self, now: f64) {
+        if self.wake.is_none() {
+            let (Some(env), Some(dir)) = (self.env.clone(), self.wake_dir.clone()) else { return };
+            let config = ExecutionConfig::new().with_environment(env).with_intra_threads(1).with_inter_threads(1);
+            self.wake = Some(wake::spawn(dir, config, self.tx.clone()));
+        }
+        let Some(w) = self.wake.clone() else { return };
+        let _ = w.tx.try_send(wake::Msg::Reset);
+        match self.open_source() {
+            Ok(s) => {
+                self.source = Some(s);
+                self.phase = Phase::Wake;
+                w.set(true);
+                log("waiting for the wake word");
+            }
+            Err(e) => {
+                log(&format!("wake word: no mic, {} ({})", e.detail, e.reason));
+                self.wake_after = now + WAKE_RETRY;
+            }
+        }
+    }
+
+    /// Stop waiting for the phrase but keep the mic: a take starts right away.
+    fn leave_wake(&mut self) {
+        if let Some(w) = &self.wake {
+            w.set(false);
+        }
+        self.phase = Phase::Idle;
+    }
+
+    fn stop_wake(&mut self) {
+        self.leave_wake();
+        self.stop_audio();
+        self.buf.lock().unwrap().clear();
+    }
+
+    fn on_wake(&mut self, score: f32) {
+        if self.phase != Phase::Wake || self.wake_hold {
+            return;
+        }
+        log(&format!("wake word heard (score {score:.2})"));
+        self.leave_wake();
+        self.listen_now();
     }
 
     fn show_listening(&mut self, mode: &str, now: f64) {
@@ -443,15 +544,18 @@ impl Voice {
         }
     }
 
-    fn start_audio(&mut self) {
+    fn open_source(&mut self) -> Result<Source, MicError> {
         self.buf.lock().unwrap().clear();
         self.floor = NoiseFloor::default();
-        let sink = Sink::new(self.buf.clone(), self.tx.clone());
-        let started = match &self.test_audio {
+        let sink = Sink::new(self.buf.clone(), self.tx.clone()).with_wake(self.wake.clone());
+        match &self.test_audio {
             Some(p) => audio::play_file(p, sink).map_err(|e| MicError::new("failed", e)),
             None => audio::open_mic(sink),
-        };
-        match started {
+        }
+    }
+
+    fn start_audio(&mut self) {
+        match self.open_source() {
             Ok(s) => self.source = Some(s),
             Err(e) => {
                 log(&format!("audio: {} ({})", e.detail, e.reason));
@@ -556,6 +660,7 @@ impl Voice {
         self.final_until = None;
         self.take += 1;
         self.phase = Phase::Idle;
+        self.wake_after = self.now() + WAKE_COOLDOWN;
         let text = self.best.trim().to_string();
         let area = self.ink.take();
         if !text.is_empty() {
@@ -587,15 +692,22 @@ impl Voice {
         self.final_until = None;
         self.take += 1;
         self.reading = false;
+        if let Some(w) = &self.wake {
+            w.set(false);
+        }
         self.phase = Phase::Idle;
         self.report_empty = false;
         let now = self.now();
+        self.wake_after = now + WAKE_COOLDOWN;
         self.ink.clear(now);
         emit(json!({ "type": "state", "state": "idle", "cancelled": true }));
     }
 
     /// Start listening hands-free without a key press (after an area snap). Ends on a pause or a tap.
     fn listen_now(&mut self) {
+        if self.phase == Phase::Wake {
+            self.leave_wake();
+        }
         if self.phase != Phase::Idle {
             return;
         }
@@ -610,7 +722,7 @@ impl Voice {
     /// hands-free, the next one sends what was said (so does a pause).
     fn toggle(&mut self) {
         match self.phase {
-            Phase::Idle => self.listen_now(),
+            Phase::Idle | Phase::Wake => self.listen_now(),
             Phase::Armed | Phase::Holding | Phase::HandsFree => {
                 let now = self.now();
                 self.end("toggled", now);
@@ -642,7 +754,21 @@ impl Voice {
                     let id = msg.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
                     log(&format!("mic: {}", id.as_deref().unwrap_or("default")));
                     *audio::CHOSEN.lock().unwrap() = id;
+                    // Waiting for the wake word on the old mic: the next tick opens the new one.
+                    if self.phase == Phase::Wake {
+                        self.stop_wake();
+                    }
                 }
+                // The wake word: on or off, with the folder its models were downloaded to. Held while Roamies is
+                // answering or speaking, so its own voice can't wake it.
+                Some("wake") => {
+                    self.wake_on = msg.get("on").and_then(Value::as_bool) == Some(true);
+                    if let Some(dir) = msg.get("dir").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                        self.wake_dir = Some(PathBuf::from(dir));
+                    }
+                    log(&format!("wake word: {}", if self.wake_on { "on" } else { "off" }));
+                }
+                Some("wake_hold") => self.wake_hold = msg.get("on").and_then(Value::as_bool) == Some(true),
                 Some("chord") => {
                     let mods: Vec<String> = msg.get("mods").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default();
                     self.set_chord(&mods);
@@ -657,12 +783,24 @@ impl Voice {
                 if matches!(self.phase, Phase::Armed | Phase::Holding | Phase::HandsFree) {
                     emit(mic_error(&e));
                     self.cancel();
+                } else if self.phase == Phase::Wake {
+                    self.stop_wake();
+                    self.wake_after = self.now() + WAKE_RETRY;
                 }
             }
             Ev::Text { take, text, last } => self.on_text(take, text, last),
             Ev::EngineFailed(e) => {
                 self.engine = None;
                 self.engine_error = Some(e);
+            }
+            Ev::Wake(score) => self.on_wake(score),
+            Ev::WakeFailed(e) => {
+                log(&format!("wake word failed: {e}"));
+                if self.phase == Phase::Wake {
+                    self.stop_wake();
+                }
+                self.wake = None;
+                self.wake_on = false;
             }
         }
         false
@@ -695,7 +833,7 @@ fn main() {
 
     if let Some(wav) = arg(&args, "--transcribe") {
         let dir = model.expect("--transcribe needs --model <dir>");
-        let mut asr = load_model(&dir).unwrap_or_else(|e| panic!("model: {e}"));
+        let mut asr = onnx_env().and_then(|env| load_model(&dir, env)).unwrap_or_else(|e| panic!("model: {e}"));
         let (samples, rate) = audio::read_wav(Path::new(&wav)).unwrap_or_else(|e| panic!("{wav}: {e}"));
         let t0 = Instant::now();
         let text = transcribe(&mut asr, samples.clone());
@@ -704,9 +842,16 @@ fn main() {
     }
 
     let (tx, rx): (Sender<Ev>, Receiver<Ev>) = mpsc::channel();
-    let (engine, engine_thread) = match &model {
-        Some(dir) if model_present(dir) => {
-            let (jobs, handle) = spawn_engine(dir.clone(), tx.clone());
+    let env = match onnx_env() {
+        Ok(e) => Some(e),
+        Err(e) => {
+            log(&format!("ONNX Runtime failed to start: {e}"));
+            None
+        }
+    };
+    let (engine, engine_thread) = match (&model, &env) {
+        (Some(dir), Some(env)) if model_present(dir) => {
+            let (jobs, handle) = spawn_engine(dir.clone(), env.clone(), tx.clone());
             (Some(jobs), Some(handle))
         }
         _ => {
@@ -714,7 +859,7 @@ fn main() {
             (None, None)
         }
     };
-    let mut voice = Voice::new(engine, arg(&args, "--test-audio").map(PathBuf::from), tx.clone());
+    let mut voice = Voice::new(engine, arg(&args, "--test-audio").map(PathBuf::from), tx.clone(), env);
     if let Some(c) = arg(&args, "--chord") {
         voice.set_chord(&c.split(',').map(str::to_owned).collect::<Vec<_>>());
     }
@@ -771,7 +916,7 @@ mod tests {
         w.finalize().expect("wav written");
         let (jobs, jrx) = mpsc::channel();
         let (tx, _events) = mpsc::channel();
-        (Voice::new(Some(jobs), Some(wav.clone()), tx), jrx, wav)
+        (Voice::new(Some(jobs), Some(wav.clone()), tx, None), jrx, wav)
     }
 
     #[test]
@@ -870,7 +1015,7 @@ mod tests {
     #[test]
     fn toggle_without_a_speech_model_stays_idle() {
         let (tx, _events) = mpsc::channel();
-        let mut v = Voice::new(None, None, tx);
+        let mut v = Voice::new(None, None, tx, None);
         v.toggle();
         assert_eq!(v.phase, Phase::Idle);
         assert!(v.source.is_none());

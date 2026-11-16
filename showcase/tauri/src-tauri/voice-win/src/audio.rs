@@ -54,11 +54,18 @@ pub struct Sink {
     channels: usize,
     mono: Vec<f32>,
     out: Vec<f32>,
+    // The wake word listener also hears the microphone, while it's waiting for the phrase.
+    wake: Option<crate::wake::Wake>,
 }
 
 impl Sink {
     pub fn new(buf: Arc<Mutex<Vec<f32>>>, tx: Sender<Ev>) -> Self {
-        Sink { buf, tx, resampler: None, channels: 1, mono: Vec::new(), out: Vec::new() }
+        Sink { buf, tx, resampler: None, channels: 1, mono: Vec::new(), out: Vec::new(), wake: None }
+    }
+
+    pub fn with_wake(mut self, wake: Option<crate::wake::Wake>) -> Self {
+        self.wake = wake;
+        self
     }
 
     fn start(&mut self, rate: u32, channels: usize) {
@@ -82,6 +89,9 @@ impl Sink {
             r.push(&self.mono, &mut self.out);
         }
         self.buf.lock().unwrap().extend_from_slice(&self.out);
+        if let Some(w) = &self.wake {
+            w.feed(&self.out);
+        }
         let _ = self.tx.send(Ev::Level(level));
     }
 }
