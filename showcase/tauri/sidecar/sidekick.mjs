@@ -34,6 +34,7 @@ import { saveCardImage } from './cardimage.mjs';
 import { cleanWakeName, wakeName } from './wakename.mjs';
 import { KEY_NAME as SYNC_KEY, MIN_PASSPHRASE, checkFolder, folderReady, merge as syncMerge, newDevice, prepareFolder, readRemotes, suggestFolders, tooMuchGone, writeOwn } from './sync.mjs';
 import { EMOTES, EchoFilter, ReplyStream } from './reply.mjs';
+import { createLocalTts, localTtsCommand } from './localtts.mjs';
 import { DEFAULT_SPEECH_LANG, SPEECH_LANGS, downloadModel, isReady, modelDir, sizeLabel, speechModel, totalBytes } from './voicemodel.mjs';
 import { copyText, createTools, expand, fitImage, imageBlock, winOpen } from './tools.mjs';
 import { describeMarks } from './marks.mjs';
@@ -228,9 +229,22 @@ async function syncGeminiVoiceKey() {
   else ttsKeys.gemini = (await voiceKey('gemini').catch(() => [null, false]))[1];
 }
 // Point the speaker at a service, with its voice and model. Its key is set after (a change of service clears it).
+// The local voice's server, started here when the settings name a command for it (localtts.mjs) and nothing is
+// answering yet. Made on first use: the log folder and the menu aren't set up while this file is still loading.
+let localTts = null;
+function ensureLocalTts() {
+  if (!localTtsCommand(config)) return;
+  setTimeout(async () => {
+    if (!tts().local) return;
+    await fs.mkdir(LOG_DIR, { recursive: true, mode: 0o700 }).catch(() => {}); // no log file then
+    localTts ??= createLocalTts({ command: () => localTtsCommand(config), status: () => speech.checkLocal(), log: (kind, data) => logLine(kind, data), logFile: path.join(LOG_DIR, 'localtts.log') });
+    await localTts.ensure();
+    menu(); if (panelOpen) panel();
+  }, 0);
+}
 function aimSpeaker(id) {
   speech.setProvider(id);
-  if (TTS[id]?.local) speech.setLocalVoice(studioVoice());
+  if (TTS[id]?.local) { speech.setLocalVoice(studioVoice()); ensureLocalTts(); }
   else if (id === 'gemini') { speech.setVoice(geminiVoice()); speech.setModel(config.geminiModel); }
   else { speech.setVoice(lookVoice()); speech.setModel(config.fishModel); }
 }
@@ -2441,6 +2455,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   if (busy) syncSession();
   agents.stopAll();
   closeSpare();
+  localTts?.stop();
   Promise.race([flushWrites(), new Promise((r) => setTimeout(r, 3000))]).finally(() => process.exit(0));
 });
 
