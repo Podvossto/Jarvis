@@ -1,0 +1,7 @@
+# The Thai frontend (tltk) needs scikit-learn 1.2, which needs NumPy 1.x; pandas is imported by tltk but not declared.
+torch
+wayu-tts @ git+https://github.com/wayu-research/wayu-tts-inference
+scikit-learn==1.2.2
+numpy==1.26.4
+pandas<2.3
+aiohttp
