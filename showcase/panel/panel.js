@@ -688,6 +688,7 @@
       group('Hands-free', 'When the mic opens without a key.', null,
         toggle('Auto-listen', needs('Mic opens when I ask you something.'), v.autoListen, () => act('autolisten'), 'autolisten'),
         toggle('Listen after reminders', needs('Mic opens after a reminder, so you can say “snooze 10 minutes”.'), v.snoozeListen, () => act('snoozelisten'), 'snoozelisten'),
+        v.wakeOk ? toggle('Wake word', needs(`Say “${v.wakePhrase}” to talk. Mic stays on. Also in the tray menu.`), v.wakeWord, () => act('wakeword'), 'wakeword') : null,
         v.mac ? toggle('Wake word', needs(`Say “Hey ${v.wakeName || 'Roamies'}” to talk. Mic stays on.`), v.wakeWord, () => act('wakeword'), 'wakeword') : null,
         v.mac ? el('div', { className: 'setting' }, el('span', {}, 'Wake word name', el('small', { textContent: `Hey ${v.wakeName || 'Roamies'}` })),
           link('Change', () => act('wakename'), { k: 'wakename', aria: 'Change the wake word name' })) : null),

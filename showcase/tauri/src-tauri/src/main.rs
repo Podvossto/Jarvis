@@ -1632,7 +1632,8 @@ fn handle_sidecar(app: &AppHandle, msg: Value) {
                 let sound = msg.get("sound").and_then(Value::as_bool).unwrap_or(true);
                 to_voice(app, &json!({ "cmd": "sound", "on": sound }));
                 let wake = msg.get("wake").and_then(Value::as_bool).unwrap_or(false);
-                to_voice(app, &json!({ "cmd": "wake", "on": wake }));
+                // Windows: the folder the wake word's models were downloaded to goes with it.
+                to_voice(app, &json!({ "cmd": "wake", "on": wake, "dir": msg.get("wakeDir") }));
                 let name = msg.get("wakeName").and_then(Value::as_str).unwrap_or("");
                 to_voice(app, &json!({ "cmd": "wake_name", "word": name }));
             } else {

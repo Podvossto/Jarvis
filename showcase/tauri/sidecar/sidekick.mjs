@@ -35,7 +35,7 @@ import { cleanWakeName, wakeName } from './wakename.mjs';
 import { KEY_NAME as SYNC_KEY, MIN_PASSPHRASE, checkFolder, folderReady, merge as syncMerge, newDevice, prepareFolder, readRemotes, suggestFolders, tooMuchGone, writeOwn } from './sync.mjs';
 import { EMOTES, EchoFilter, ReplyStream } from './reply.mjs';
 import { createLocalTts, localTtsCommand } from './localtts.mjs';
-import { DEFAULT_SPEECH_LANG, SPEECH_LANGS, downloadModel, isReady, modelDir, sizeLabel, speechModel, totalBytes } from './voicemodel.mjs';
+import { DEFAULT_SPEECH_LANG, SPEECH_LANGS, WAKE, WAKE_PHRASE, downloadModel, isReady, modelDir, sizeLabel, speechModel, totalBytes } from './voicemodel.mjs';
 import { copyText, createTools, expand, fitImage, imageBlock, winOpen } from './tools.mjs';
 import { describeMarks } from './marks.mjs';
 import { faviconFor } from './draw.mjs';
@@ -151,6 +151,11 @@ const NEEDS_MODEL = needsVoiceModel(process.platform);
 // once the settings are read, and again when the language changes.
 let MODEL = speechModel(DEFAULT_SPEECH_LANG), MODEL_DIR = modelDir(MODEL);
 const voiceModel = { status: NEEDS_MODEL ? 'missing' : 'ready', done: 0, total: totalBytes(MODEL), error: null };
+// The wake word on Windows: a fixed phrase ("Hey Jarvis") heard by the voice helper with its own small models,
+// downloaded the first time it's turned on. macOS has its own (any name, through Apple's recogniser).
+const WAKE_OK = process.platform === 'win32';
+const WAKE_DIR = modelDir(WAKE);
+const wakeReady = () => isReady(WAKE_DIR, WAKE);
 function pickSpeechModel() {
   MODEL = speechModel(config.speechLang); MODEL_DIR = modelDir(MODEL);
   Object.assign(voiceModel, { status: !NEEDS_MODEL || isReady(MODEL_DIR, MODEL) ? 'ready' : 'missing', done: 0, total: totalBytes(MODEL), error: null });
@@ -1081,7 +1086,7 @@ function holdWake(on) {
   if (on) wakeHoldTimer = setTimeout(() => holdWake(busy), 3 * 60_000);
   if (on === wakeHeld) return;
   wakeHeld = on;
-  if (MAC) send({ type: 'wake_hold', on });
+  if (MAC || WAKE_OK) send({ type: 'wake_hold', on });
 }
 const autoListenOn = () => VOICE_OK && !!config.voice && !!config.autoListen && voiceReady() && !intro;
 // The agents' news waits for a quiet moment (desk.tick): nothing running or queued, not listening, the last reply
@@ -1819,6 +1824,8 @@ function menu() {
     { id: 'ask', label: `Ask ${lookName()}…`, enabled: !busy },
     ...(SNAP_OK ? [{ id: 'snap', label: 'Ask About an Area…', accel: keys().snap }] : []),
     { id: 'stop', label: 'Stop', enabled: busy },
+    // One click from the tray turns the always-on microphone off (or back on).
+    ...(WAKE_OK && VOICE_OK && config.voice && voiceReady() ? [{ id: 'wakeword', label: `Listen for “${WAKE_PHRASE}”`, checked: !!config.wakeWord }] : []),
     { id: 'diagnostics', label: 'Save Diagnostics…', enabled: !diagnosing },
     ...(update.available ? [{ sep: true }, { id: 'install_update', label: update.page ? `Get Roamies ${update.available}…` : update.installing ? `Installing ${update.available}…` : `Install Update ${update.available} and Restart`, enabled: !update.installing }] : []),
     { sep: true },
@@ -1894,7 +1901,7 @@ function panelState() {
     geminiModel: config.geminiModel, geminiModels: GEMINI_CHOICES,
     studio: tts().local ? studioState() : null,
     voice: VOICE_OK ? {
-      on: !!config.voice, keys: HOTKEYS_OK ? talkSymbols() : null, ready: voiceReady(), mac: MAC, mute: config.muteWhileTalking !== false, autoListen: !!config.autoListen, snoozeListen: !!config.snoozeListen, wakeWord: !!config.wakeWord, wakeName: wakeName(config),
+      on: !!config.voice, keys: HOTKEYS_OK ? talkSymbols() : null, ready: voiceReady(), mac: MAC, wakeOk: WAKE_OK, wakePhrase: WAKE_PHRASE, mute: config.muteWhileTalking !== false, autoListen: !!config.autoListen, snoozeListen: !!config.snoozeListen, wakeWord: !!config.wakeWord, wakeName: wakeName(config),
       // The language it listens for (Windows and Linux, where the speech model is picked by language).
       lang: NEEDS_MODEL ? (SPEECH_LANGS.some((l) => l.id === config.speechLang) ? config.speechLang : DEFAULT_SPEECH_LANG) : null, langs: NEEDS_MODEL ? SPEECH_LANGS : [],
       // The mic picker: what the voice helper lists, the pick ('' is automatic) and the mic automatic uses now.
@@ -1911,7 +1918,7 @@ function panelState() {
 }
 
 
-const voiceConfig = () => send({ type: 'voice_config', enabled: VOICE_OK && config.voice && voiceReady(), mute: config.muteWhileTalking !== false, sound: !!config.sound, wake: MAC && !!config.wakeWord, wakeName: config.wakeName || '', ...(NEEDS_MODEL ? { model: MODEL_DIR } : {}) });
+const voiceConfig = () => send({ type: 'voice_config', enabled: VOICE_OK && config.voice && voiceReady(), mute: config.muteWhileTalking !== false, sound: !!config.sound, wake: (MAC || (WAKE_OK && wakeReady())) && !!config.wakeWord, ...(WAKE_OK ? { wakeDir: WAKE_DIR } : {}), wakeName: config.wakeName || '', ...(NEEDS_MODEL ? { model: MODEL_DIR } : {}) });
 
 // Progress goes to the setup guide often and to the tray menu now and then.
 let modelShownAt = 0, modelMenuAt = 0;
@@ -1953,6 +1960,26 @@ function setSpeechLang(lang) {
   logLine('speech_lang', { lang, ready: voiceReady() });
   voiceConfig(); menu();
   if (config.voice && !voiceReady()) getVoiceModel();
+}
+// The wake word on Windows, on or off. Turning it on fetches its models first if they aren't here yet; if that
+// fails it stays off, and says why.
+let wakeFetching = false;
+async function setWakeWord(on) {
+  if (!WAKE_OK || wakeFetching) return;
+  if (on && !wakeReady()) {
+    wakeFetching = true;
+    try { await downloadModel(WAKE_DIR, { model: WAKE }); }
+    catch (e) {
+      logLine('wake_model', { phase: 'error', code: e.code, message: String(e.message ?? e).slice(0, 200) });
+      say(`I couldn't download the wake word. ${e.code === 'disk' ? 'There isn\'t enough disk space.' : 'Check your internet and try again.'}`, 'concerned');
+      return;
+    } finally { wakeFetching = false; }
+  }
+  config.wakeWord = !!on; saveConfig(); agentStale = true;
+  logLine('wake_word', { on: config.wakeWord });
+  voiceConfig(); menu();
+  // Never the phrase itself here: this is spoken aloud, and its own voice would wake it.
+  say(config.wakeWord ? 'Wake word is on. The mic stays open until you turn it off.' : 'Wake word is off.', 'happy');
 }
 const startVoiceDownload = () => {
   if (voiceModel.status === 'downloading') return say(`Still downloading my voice: ${Math.floor((voiceModel.done / voiceModel.total) * 100)}% done.`, 'happy');
@@ -2155,6 +2182,7 @@ async function onMenu(id, via) {
   else if (id === 'mutetalk') { config.muteWhileTalking = config.muteWhileTalking === false; saveConfig(); voiceConfig(); menu(); }
   else if (id === 'autolisten') { config.autoListen = !config.autoListen; saveConfig(); menu(); }
   else if (id === 'snoozelisten') { config.snoozeListen = !config.snoozeListen; saveConfig(); menu(); }
+  else if (id === 'wakeword' && WAKE_OK) setWakeWord(!config.wakeWord);
   else if (id === 'wakeword' && MAC) { config.wakeWord = !config.wakeWord; saveConfig(); agentStale = true; voiceConfig(); menu(); }
   else if (id === 'wakename' && MAC) {
     const typed = await ask({ prompt: `Wake word: what should come after "Hey"? (now ${wakeName(config)}; leave empty for Roamies)`, placeholder: 'Jarvis' });

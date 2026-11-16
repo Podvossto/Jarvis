@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { MODEL, MODELS, SPEECH_LANGS, TYPHOON, downloadModel, isReady, modelDir, speechModel, totalBytes } from '../voicemodel.mjs';
+import { MODEL, MODELS, SPEECH_LANGS, TYPHOON, WAKE, downloadModel, isReady, modelDir, speechModel, totalBytes } from '../voicemodel.mjs';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'roamies-model-test-'));
 process.on('exit', () => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -94,7 +94,10 @@ assert.equal(speechModel('xx'), TYPHOON);
 assert.equal(speechModel(undefined), TYPHOON);
 assert.deepEqual(SPEECH_LANGS.map((l) => l.id).sort(), Object.keys(MODELS).sort());
 assert.notEqual(modelDir(TYPHOON), modelDir(MODEL)); // side by side, so switching back needs no download
-for (const m of Object.values(MODELS)) for (const f of m.files) assert.match(f.sha256, /^[0-9a-f]{64}$/);
+for (const m of [...Object.values(MODELS), WAKE]) for (const f of m.files) assert.match(f.sha256, /^[0-9a-f]{64}$/);
+// The wake word's models are their own download, kept apart from the speech models.
+assert.equal(WAKE.files.length, 3);
+assert.ok(![modelDir(TYPHOON), modelDir(MODEL)].includes(modelDir(WAKE)));
 
 server.close();
 console.log('voice model download tests: passed');
