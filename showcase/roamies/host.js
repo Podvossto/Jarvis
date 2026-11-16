@@ -321,6 +321,7 @@
         Roamie.ink?.play(e);
         break;
       case 'ink_clear': Roamie.ink?.clear(e); break;
+      case 'ink_close': Roamie.ink?.close(e.parts); break;
       case 'ink_stale': Roamie.ink?.stale(); break;
       case 'tool_target': {
         // The real window being captured, in global screen points → this overlay's coordinates.

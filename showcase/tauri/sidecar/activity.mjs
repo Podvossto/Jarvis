@@ -25,6 +25,7 @@ export function describe(name, args = {}) {
     case 'web_search': return ['Searching the web', 'Searched the web'];
     case 'remember_commitment': return ['Adding a reminder', 'Added a reminder'];
     case 'update_commitment': return ['Updating a reminder', 'Updated a reminder'];
+    case 'close_card': return ['Closing it', 'Closed it'];
     case 'remember_fact': return ['Remembering it', 'Remembered it'];
     case 'forget_fact': return ['Forgetting it', 'Forgot it'];
     case 'start_focus': return ['Starting a focus block', 'Started a focus block'];

@@ -410,6 +410,24 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, foc
   });
   const clearScreenInk = (stop = false) => { parts.clearScreen(); for (const id of buttons.keys()) if (!parts.has(id)) buttons.delete(id); ui({ kind: 'agent', e: { type: 'ink_clear', screen: true, stop } }); };
   const clearAllInk = () => { forgetInk(); ui({ kind: 'agent', e: { type: 'ink_clear' } }); };
+  // Closing on request: no pen, just gone. Unlike the next drawing replacing the last, this takes pinned cards too.
+  function closeDrawn({ last, parts: named, all } = {}) {
+    if (all) {
+      if (!parts.ids.length) return 'Nothing is drawn on screen.';
+      for (const done of [...ink.waits.values()]) done('stopped');
+      parts.clear(); pinned.clear(); buttons.clear(); quizzes.clear(); loose.clear();
+      ui({ kind: 'agent', e: { type: 'ink_clear', stop: true } });
+      return 'Closed everything. On screen now: nothing.';
+    }
+    const ids = named?.length ? named.map(String) : parts.cards(last ?? 1);
+    const missing = ids.filter((id) => !parts.has(id));
+    if (missing.length) throw new Error(`There's no ${missing.join(', ')} on screen now${parts.ids.length ? ` (there is: ${parts.describe()})` : ' (nothing is drawn)'}.`);
+    if (!ids.length) return parts.ids.length ? `No card is open (on screen: ${parts.describe()}). Name the parts to close, or use all.` : 'Nothing is drawn on screen.';
+    const what = parts.describe(ids);
+    for (const id of ids) { parts.remove(id); buttons.delete(id); quizzes.delete(id); loose.delete(id); pinned.delete(id); }
+    ui({ kind: 'agent', e: { type: 'ink_close', parts: ids } });
+    return `Closed ${what}. On screen now: ${parts.describe() || 'nothing'}.`;
+  }
   // The window a drawing belongs to: the front window's id and place. Its title isn't part of it (a page updating
   // its title, a document being edited, isn't the screen changing).
   // Its rect and app too, so a click can be told to be in it.
@@ -701,6 +719,8 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, foc
     // The app takes its own drawing away (the setup showcase, when its step is left): everything goes.
     clear: () => { for (const done of [...ink.waits.values()]) done('stopped'); clearAllInk(); },
     describe: () => parts.describe(),
+    /** "Close that": the newest cards (last), named parts, or everything. Returns what the model is told. */
+    close: closeDrawn,
     // The user clicked ({ x, y, role, app, acts } from the voice helper). In the drawing's window, or one of its app's
     // menu items: on something that does something, the drawing goes now; anywhere else in it, it goes if the page then
     // changes (a script-driven link). Not while a walkthrough waits for exactly that click.
@@ -849,9 +869,15 @@ molecule (smiles, label) for chemistry. model (parts [{shape: box|sphere|cylinde
 quiz (questions [{text, options: 2 to 4, answer: the right option word for word, explain}], up to ${LIMITS.questions}) for "test me": they answer by clicking and see right or wrong at once, and their score comes to you with their next message, so say a line and stop: never ask the questions in words too, or ask them for their answers or score.
 Deep explanations: when they want to really understand something ("explain gene transcription in depth", "teach me how a jet engine works", "walk me through photosynthesis"), or the answer is a process with several stages, set deep: true. Each card then opens big in the middle of the screen and replaces the one before, so plan 4 to 10 beats with one card each that build on each other: the big picture first, then one stage or idea per card (flow, model, molecule, graph, timeline, table, math, photo with labels), then a short summary card. Each say line tells that part of the story; the cards show it. Not for quick answers.
 Actions: type (text into the field at; needs actions allowed), copy (text to the clipboard), open (url), handoff (task), button (text + action {do: ask|open|copy, value}: a likely next step they can click), emote (name: hype, wave, upset, remind, motivate), sfx (name). tone: accent, teal, amber, coral, lilac, sky, lime, red, white.
-A drawing stays until the user clears it or the window changes; your next drawing replaces it. At most ${LIMITS.cardsShown} cards show at once (one more closes the oldest), so make a point with the fewest cards. Every drawn piece gets an id (p1, p2 …) in the result. To change what's drawn ("make that red", "move it left", "never mind"): edit [{do: recolor|move|erase|clear, part, tone, dx, dy}] with no beats. Up to 12 beats, 40 marks each.${POINTER_OK ? '' : " On this desktop (Wayland) clicks and hovers in other apps can't be seen: never use wait; beats play one after another, so say each step's line in an order that reads well without pausing."}`,
+To close a card when asked, use close_card, not an edit. A drawing stays until the user clears it or the window changes; your next drawing replaces it. At most ${LIMITS.cardsShown} cards show at once (one more closes the oldest), so make a point with the fewest cards. Every drawn piece gets an id (p1, p2 …) in the result. To change what's drawn ("make that red", "move it left", "never mind"): edit [{do: recolor|move|erase|clear, part, tone, dx, dy}] with no beats. Up to 12 beats, 40 marks each.${POINTER_OK ? '' : " On this desktop (Wayland) clicks and hovers in other apps can't be seen: never use wait; beats play one after another, so say each step's line in an order that reads well without pausing."}`,
       parameters: DrawArgs, executionMode: 'sequential', timeoutMs: 30 * 60_000,
       execute: draw,
+    },
+    {
+      name: 'close_card',
+      description: 'Close what you drew when the user says to close, hide or get rid of it ("close that", "ปิดอันนี้", "ปิดการ์ดนี้", "ปิดหมดเลย", "get rid of the graph"). last: how many of the newest cards to close (1 is the one you just made; the default). parts: ids from "Drawn on screen now" in <live-state>, for a particular one. all: everything drawn. Say it is closed in a few words; never redraw it.',
+      parameters: z.object({ last: z.number().int().min(1).max(LIMITS.cardsShown).optional(), parts: z.array(z.string().max(8)).max(20).optional(), all: z.boolean().optional() }),
+      execute: async (args) => closeDrawn(args),
     },
     {
       name: 'see_photo',

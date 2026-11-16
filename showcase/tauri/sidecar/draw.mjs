@@ -360,6 +360,8 @@ export function createParts() {
       for (const id of gone) all.delete(id);
       return gone;
     },
+    /** The newest `n` cards, newest first (what "close that" means). */
+    cards(n = 1) { return [...all].filter(([, p]) => CARDS.includes(p.kind)).map(([id]) => id).reverse().slice(0, Math.max(0, n)); },
     get screenCount() { return [...all.values()].filter((p) => p.screen).length; },
     get ids() { return [...all.keys()]; },
     describe: (ids = [...all.keys()]) => describeParts(ids.map((id) => [id, all.get(id)]).filter(([, p]) => p)),
