@@ -9,12 +9,12 @@ import { AVAILABLE as CHARTS_AVAILABLE, LIMITS as CHART_LIMITS, TYPES as CHART_T
 
 export const LIMITS = { beats: 12, marks: 40, points: 200, parts3d: 40, atoms: 120, photoBytes: 800_000, iconBytes: 64_000,
   nodes: 16, links: 24, columns: 6, rows: 12, bars: 12, labels: 8, pins: 12, shade: 40, routes: 8, steps: 10, tex: 300, vertices: 16, questions: 6, cardsShown: 4,
-  chartSeries: CHART_LIMITS.series, chartPoints: CHART_LIMITS.points, chartCategories: CHART_LIMITS.categories, chartSlices: CHART_LIMITS.slices };
+  chartSeries: CHART_LIMITS.series, chartPoints: CHART_LIMITS.points, chartCategories: CHART_LIMITS.categories, chartSlices: CHART_LIMITS.slices, htmlChars: 40_000 };
 export const TONES = ['accent', 'teal', 'amber', 'coral', 'lilac', 'sky', 'lime', 'red', 'white'];
 // Marks on the real screen (they need a place on it), actions in apps, and cards drawn on calm space.
 export const SCREEN = ['point', 'target', 'hover', 'ring', 'frame', 'underline', 'strike', 'check', 'cross', 'connect', 'trace', 'num', 'label', 'write', 'scroll', 'spotlight', 'highlight', 'line', 'curve', 'arrow', 'circle', 'rect'];
 export const ACTIONS = ['emote', 'sfx', 'type', 'copy', 'open', 'handoff', 'button'];
-export const CARDS = ['card', 'note', 'list', 'mindmap', 'clip', 'sources', 'photo', 'graph', 'chart', 'legend', 'timeline', 'molecule', 'model', 'flow', 'table', 'bars', 'map', 'math', 'geometry', 'quiz', 'ticket', 'medal'];
+export const CARDS = ['card', 'note', 'list', 'mindmap', 'clip', 'sources', 'photo', 'graph', 'chart', 'legend', 'timeline', 'molecule', 'model', 'flow', 'table', 'bars', 'map', 'math', 'geometry', 'quiz', 'ticket', 'medal', 'html'];
 export const KINDS = [...SCREEN, ...ACTIONS, ...CARDS];
 // Drawn from a list of points (screenshot pixels) instead of one place.
 const PATHS = new Set(['trace', 'line', 'curve', 'arrow']);
@@ -87,10 +87,12 @@ const Mark = z.object({
   angles: z.array(z.object({ at: z.string().min(1).max(8), from: z.string().min(1).max(8), to: z.string().min(1).max(8), label: z.string().max(12).optional() })).max(8).optional(),
   circles: z.array(z.object({ at: z.string().min(1).max(8), r: num, label: z.string().max(20).optional(), tone: z.enum(TONES).optional() })).max(4).optional(),
   questions: z.array(z.object({ text: z.string().min(1).max(160), options: z.array(z.string().min(1).max(80)).min(2).max(4), answer: z.string().min(1).max(80), explain: z.string().max(200).optional() })).max(LIMITS.questions).optional(),
+  // The free-form card: the model's own HTML, shown in a sandboxed frame (no network, no files, no navigation).
+  html: z.string().min(1).max(LIMITS.htmlChars).optional(),
   action: z.object({ do: z.enum(['ask', 'open', 'copy']), value: z.string().min(1).max(600) }).optional(),
   task: z.string().max(120).optional(),
 });
-const Beat = z.object({ say: z.string().min(1).max(240), marks: z.array(Mark).max(LIMITS.marks), wait: z.enum(['click', 'hover']).optional() });
+const Beat = z.object({ say: z.string().min(1).max(240).optional(), marks: z.array(Mark).max(LIMITS.marks), wait: z.enum(['click', 'hover']).optional() });
 const Edit = z.object({ do: z.enum(['recolor', 'move', 'erase', 'clear']), part: z.string().max(8).optional(), tone: z.enum(TONES).optional(), dx: num.optional(), dy: num.optional() });
 export const DrawArgs = z.object({
   target: z.string().optional(),
@@ -183,6 +185,11 @@ const CHECKS = {
     if (!m.chart) return ['needs chart (the spec).'];
     if (!CHARTS_AVAILABLE.includes(m.chart.type)) return [`chart type "${m.chart.type}" isn't available yet (available: ${CHARTS_AVAILABLE.join(', ')}); use one of those.`];
     return checkChart(m.chart);
+  },
+  html(m) {
+    if (!m.html || !m.html.trim()) return ['needs html (the page to show).'];
+    if (m.html.length > LIMITS.htmlChars) return [`too much HTML (${m.html.length} characters; the cap is ${LIMITS.htmlChars}). Keep it small.`];
+    return [];
   },
   labels(m) {
     const out = [];

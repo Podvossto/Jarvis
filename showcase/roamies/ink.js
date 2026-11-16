@@ -991,6 +991,29 @@
       sfx('scan');
       return c;
     },
+    // The free-form card: their own HTML in a sandboxed frame — an opaque origin that can't reach the network or files.
+    async html(m) {
+      const W = 460, H = 400, BAR = 26;
+      const frame = document.createElement('iframe');
+      frame.setAttribute('sandbox', 'allow-scripts');
+      frame.setAttribute('referrerpolicy', 'no-referrer');
+      frame.style.cssText = 'position:fixed;z-index:5;border:0;background:rgba(6,22,24,0.98);display:none;';
+      frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:"></head><body style="margin:0;background:transparent;color:#dcfff6;font:400 13px ui-monospace,monospace">${m.html}</body></html>`;
+      m.iframe = frame;
+      document.body.appendChild(frame);
+      const c = await card(m, W, H, function (b, l, t, x, y) {
+        b.fillStyle = 'rgba(6,22,24,0.98)'; b.fillRect(x + 2, y + 1, (this.cw ?? W) - 4, (this.ch ?? H) - BAR - 3);
+        // The frame rides the card: the same zoom-around-ox,oy the canvas draws this card with.
+        const k = this.k ?? 1, ox = this.ox ?? 0, oy = this.oy ?? 0;
+        frame.style.display = 'block';
+        frame.style.left = `${Math.round(ox + (x + 2 - ox) * k)}px`;
+        frame.style.top = `${Math.round(oy + (y + 1 - oy) * k)}px`;
+        frame.style.width = `${Math.max(40, Math.round(((this.cw ?? W) - 4) * k))}px`;
+        frame.style.height = `${Math.max(40, Math.round(((this.ch ?? H) - BAR - 19) * k))}px`;
+      }, { title: m.title || 'html' });
+      sfx('scan');
+      return c;
+    },
     async legend(m) {
       // Keys flow onto more lines rather than past the edge.
       const maxW = 420, at0 = []; let cx = 18, row = 0, widest = 0;
@@ -1872,7 +1895,7 @@
       touch();
     }
   }
-  const fadeOut = async (ms, sec = 0.35) => { ms.forEach((m) => (m.leaving = true)); syncClearAll(); await tween(sec, (u) => ms.forEach((m) => (m.alpha = Math.min(m.alpha, 1 - u)))); ms.forEach((m) => (m.alive = false)); touch(); syncClearAll(); };
+  const fadeOut = async (ms, sec = 0.35) => { ms.forEach((m) => { m.leaving = true; m.iframe?.remove?.(); }); syncClearAll(); await tween(sec, (u) => ms.forEach((m) => (m.alpha = Math.min(m.alpha, 1 - u)))); ms.forEach((m) => (m.alive = false)); touch(); syncClearAll(); };
   // Clear all: once two or more cards are open, one chip at the bottom clears the whole drawing (no closing them one
   // by one). It sits just above where the caption shows.
   let clearAll = null;
