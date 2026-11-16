@@ -10,9 +10,10 @@ import { SAFE, checkDrawAction, checkLink, checkOpen, checkRead, checkWrite, red
 import { agentsRoot, createAgents, holdAfterLaunch, newsDesk, wantsAgent } from './agents.mjs';
 import { agentEvents, stallWatch } from './agentstream.mjs';
 import { CATALOG_PROVIDERS, createCatalogs } from './catalogs.mjs';
+import { summarise, usageLine } from './usage.mjs';
 import {
   AUTH_PROVIDERS, AuthStorage, OPENAI_CHATGPT_KEY, apiKeyStorageKeys, claudeCodeEnv, dualAuthProvider, getAuthStorageKeys, getContextWindow, getDefaultModel, getModel,
-  getModelsForProvider, loginChatGPT, ollamaServedContext, parseLocalModelId, pointScale, registerRuntimeModels, resolveClaudeCodeBinary, revokeChatGPTSignIn, signInWithClaudeCode,
+  getModelsForProvider, loginChatGPT, ollamaServedContext, parseLocalModelId, pointScale, readClaudeCodeUsage, registerRuntimeModels, resolveClaudeCodeBinary, revokeChatGPTSignIn, signInWithClaudeCode,
   signOutOfClaudeCode, storageKeyProvider,
 } from '@kenkaiiii/gg-core';
 import { execFile, execFileSync, fork } from 'node:child_process';
@@ -673,12 +674,19 @@ const hearingLine = () => {
   const voice = tts().local ? ' Your replies are spoken by a voice running on this computer (free, works offline).' : '';
   return `- Hearing: you understand ${lang} speech now (${others} is the other choice, on the Listening page; one at a time).${wake}${voice}\n`;
 };
+// Today's tokens and this conversation's context budget, said with every request: questions about usage and how much
+// room is left ("ใช้ token ไปเท่าไหร่แล้ว") are answerable without any tool call. The Usage page in the panel has the detail.
+const usageNow = () => {
+  if (!usageToday.requests) return '';
+  const context = lastInput?.tokens ? { tokens: lastInput.tokens, budget: requestBudget() } : null;
+  return `- Usage: ${usageLine(usageToday, context)}\n`;
+};
 const livePrompt = (context = '') => {
   const facts = pickFacts(context, 40), total = listFacts().length;
   lastFactIds = facts.map((f) => f.id);
   const open = commitmentsText(), done = doneTodayText(), working = agents.liveText();
   const turn = `Live state (current as of this moment):
-${frontNow ? `${frontNow}\n` : ''}${drawnLine()}${hearingLine()}${focusLine()}- Editing files, running commands and controlling other apps: ${config.allowActions ? 'ALLOWED' : `switched OFF (tell the user to turn on "Allow File Edits & Commands" on the General page in ${PANEL} if they want it)`}.
+${frontNow ? `${frontNow}\n` : ''}${drawnLine()}${hearingLine()}${focusLine()}${usageNow()}- Editing files, running commands and controlling other apps: ${config.allowActions ? 'ALLOWED' : `switched OFF (tell the user to turn on "Allow File Edits & Commands" on the General page in ${PANEL} if they want it)`}.
 ${VOICE_OK ? `- Voice: ${!config.voice ? 'off' : voiceReady() ? `on; ${HOTKEYS_OK ? `${userName} holds ${talkWords()} to talk` : `${userName} presses the key they bound to ${BIND.talk} to start talking and again to send (a pause sends too)`}${config.autoListen ? '. Auto-listen is on: when your reply to a spoken question ends with a question, the mic opens by itself for their answer' : ''}${MAC && config.wakeWord ? `. Wake word is on: ${userName} can also say "Hey ${wakeName(config)}" to start talking hands-free, and what they say right after it is the request (a request that still starts with "Hey ${wakeName(config)}" is them waking you, not calling you by another name: never correct it)${config.wakeName ? ` (they chose "${config.wakeName}" as the wake word; your own name is unchanged)` : ''}` : ''}` : `on, but the speech model isn't downloaded yet (${voiceModel.status === 'downloading' ? 'downloading now' : `the Voice page in ${PANEL}`})`}.` : ''}
 - Shortcuts: ${HOTKEYS_OK ? `${keys().write ? `type a question to you: a quick tap of ${writeWords()} (press both and let go), which opens a text field beside the cursor (Enter sends, Shift+Enter adds a line, Esc or another tap closes it)` : `the tap that opens a text field to type a question is turned off (the Ask button in ${PANEL} still opens it; the Shortcuts page there turns the tap back on)`}; show or hide you ${keyWords(keys().summon)}` : `on this Wayland desktop no app can have global shortcuts, so ${userName} binds keys to these commands in their desktop's keyboard settings: ${BIND.summon} (show or hide you), ${BIND.ask} (ask you), ${BIND.list} (the list), ${BIND.talk} (talk) and ${BIND.panel} (the panel)`}${SNAP_OK ? `; ask about an area ${keyWords(keys().snap)}` : ''}${CIRCLE_OK ? "; while holding the talk keys, moving the cursor round something circles it (no clicking; it snaps shut with a click when the circle closes, and loose lines don't count) and you'll see what they circled" : ''}${HOTKEYS_OK ? `; show the list ${keyWords(keys().list)}` : ''}.${HANDS_OK ? '' : ' Asking about an area, reading app windows, finding things on screen by their words and working other apps need the Roamies app, which isn\'t running here; draw there with x, y from a screenshot.'}`;
   const memory = `${open ? `Open commitments:\n${open}` : 'No open commitments.'}${done ? `\nDone today (ticked off on the list or by you; still shown struck through until midnight):\n${done}` : ''}
@@ -1048,11 +1056,11 @@ process.on('uncaughtException', (e, origin) => {
 });
 // One line per request in ~/.gg/sidekick/usage.jsonl: token counts and timings only, never what was said.
 const USAGE_FILE = path.join(process.env.ROAMIES_DATA_DIR ? path.join(process.env.ROAMIES_DATA_DIR, 'sidekick') : path.join(HOME, '.gg', 'sidekick'), 'usage.jsonl');
-const usageToday = { day: '', requests: 0, tokens: 0 };
+const usageToday = { day: '', requests: 0, in: 0, out: 0 };
 function logUsage(rec) {
   const day = new Date().toDateString();
-  if (usageToday.day !== day) Object.assign(usageToday, { day, requests: 0, tokens: 0 });
-  usageToday.requests++; usageToday.tokens += rec.in + rec.cacheWrite + rec.out;
+  if (usageToday.day !== day) Object.assign(usageToday, { day, requests: 0, in: 0, out: 0 });
+  usageToday.requests++; usageToday.in += rec.in + rec.cacheRead + rec.cacheWrite; usageToday.out += rec.out;
   fs.appendFile(USAGE_FILE, JSON.stringify(rec) + '\n', { mode: 0o600 }).catch(() => {});
   menu();
 }
@@ -1180,7 +1188,7 @@ async function prompt(text, image = null, note = '', byVoice = false, news = nul
     const turn = nextTurn();
     requestNo = turn;
     logLine('request', { turn, model: config.model, chars: text.length, image: !!image, session: session?.id });
-    const use = { t: Date.now(), model: config.model, calls: 0, tools: 0, in: 0, cacheRead: 0, cacheWrite: 0, out: 0 };
+    const use = { t: Date.now(), provider: config.provider, model: config.model, calls: 0, tools: 0, in: 0, cacheRead: 0, cacheWrite: 0, out: 0 };
     const soon = frontSoon; frontSoon = null;
     frontNow = soon && Date.now() - soon.at < 8000 ? await soon.p : await whereNow();
     // The first spoken request of the day carries the morning briefing (brief.mjs).
@@ -1868,9 +1876,29 @@ function menu() {
 // The panel that opens from the menu bar or tray icon: what's going on, memory and settings. It asks for the
 // state when it opens and gets it again after each change, at most once per tick, only while it's open.
 let panelOpen = false, panelQueued = false, panelAt = 0;
+// Claude's quota windows, when the Claude Code route reported them (rate_limit_event -> a file gg-core reads).
+// Refreshed at most every 5 minutes, off the state path: the first push may not have it, the next one does.
+let claudeQuota = null, quotaAt = 0;
+const refreshQuota = () => {
+  if (Date.now() - quotaAt < 5 * 60_000) return;
+  quotaAt = Date.now();
+  readClaudeCodeUsage().then((q) => { claudeQuota = q; panel(); }).catch(() => {});
+};
+// The panel's Usage page, and Home's footer: today split by provider+model, the last 7 days, where this conversation
+// sits in its context budget, and Claude's quota when known.
+function usageState() {
+  if (!usageToday.requests) return null;
+  let lines = [];
+  try { lines = fs.readFileSync(USAGE_FILE, 'utf8').split('\n'); } catch { /* no file yet: just the in-memory day */ }
+  const s = summarise(lines);
+  return { requests: usageToday.requests, tokens: usageToday.in + usageToday.out, in: usageToday.in, out: usageToday.out,
+    rows: s.today.rows.map((r) => ({ ...r, label: PROVIDER_LABELS[r.provider] ?? r.provider })), week: s.week,
+    context: lastInput?.tokens ? { tokens: lastInput.tokens, budget: requestBudget() } : null, quota: claudeQuota };
+}
 function panel() {
   if (!panelOpen || panelQueued) return;
   panelQueued = true;
+  refreshQuota();
   setImmediate(() => { panelQueued = false; if (panelOpen) { send({ type: 'panel', msg: { kind: 'state', state: { ...panelState(), tab: panelTab } } }); panelTab = null; } });
 }
 // Opens the panel on a page (the one-time tab rides on its next state).
@@ -1919,7 +1947,7 @@ function panelState() {
     }),
     loggingIn,
     recent: activity.recent,
-    usage: usageToday.requests ? { requests: usageToday.requests, tokens: usageToday.tokens } : null,
+    usage: usageState(),
     facts: listFacts().slice().reverse().map((f) => ({ id: f.id, text: f.text })),
     commitments: openCommitments().map((c) => ({ id: c.id, text: c.text, due: c.due ?? null, when: c.due ? `${fmtWhen(c.due)}${c.repeat ? ` · repeats ${repeatLabel(c.repeat)}` : ''}` : '', overdue: !!(c.due && c.due < Date.now()), repeat: c.repeat ?? null })),
     look: config.look ?? 'classic', looks: LOOKS.map(([id, label]) => [id, label]), name: lookName(),
