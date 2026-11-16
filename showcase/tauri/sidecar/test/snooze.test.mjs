@@ -59,8 +59,8 @@ assert.equal(S.getCommitment(r.id).text, 'Call mom', 'a copy, not the stored one
   const tools = readFileSync(new URL('../tools.mjs', import.meta.url), 'utf8'), side = readFileSync(new URL('../sidekick.mjs', import.meta.url), 'utf8');
   assert.match(tools, /updateCommitment\(target, \{ status: 'open', dueMs: ms, keepSeries: true \}\)/);
   const params = /async function prompt\(([^)]*)\)/.exec(side)[1].split(',').map((p) => p.trim().split(/\s*=/)[0]);
-  const args = /running\.then\(\(\) => prompt\(([^)]*)\)\)/.exec(side)[1].split(',').map((a) => a.trim());
-  assert.deepEqual(args, params, 'enqueue passes prompt its arguments in prompt\'s order');
+  const args = /return prompt\(([^)]*)\);/.exec(side)[1].split(',').map((a) => a.trim().replace(/^t\./, ''));
+  assert.deepEqual(args, params, 'the queue passes prompt its arguments in prompt\'s order');
 }
 await S.flushWrites();
 console.log('snooze tests: passed');

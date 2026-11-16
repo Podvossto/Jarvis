@@ -232,7 +232,7 @@
   // While a drawing plays, the rest of the answer (its last line, the end of the turn) waits for it, so the reply's
   // bubble doesn't ride along on the drawing cursor. Drawings themselves, and a new request or an error, never wait.
   let deferred = null;
-  const PASS = new Set(['draw', 'ink_clear', 'ink_stale', 'start', 'error', 'tool_target', 'tool_image']);
+  const PASS = new Set(['draw', 'ink_clear', 'ink_stale', 'start', 'error', 'tool_target', 'tool_image', 'tasks']);
   function onAgent(e) {
     if (e.type === 'start' || e.type === 'error') flushDeferred();
     if (deferred && !PASS.has(e.type)) { deferred.push(e); return; }
@@ -344,6 +344,8 @@
       }
       // The parts of a "do this, then that" request, ticking off.
       case 'trail': a.cards?.trail(e); break;
+      // What's running, queued and with the agents, while requests wait in line instead of cancelling.
+      case 'tasks': a.cards?.tasks(e); break;
       case 'emote':
         nextMood = MOODS[e.action] ?? null;
         a.act(e.action);

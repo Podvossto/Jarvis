@@ -108,34 +108,81 @@
     }
   }
 
-  const orig = R.agentPlugin;
+  // ---------- tasks: what's running, what's queued behind it, what the background agents are on ----------
+  class Tasks extends Card {
+    set(e, k) {
+      this.items = e.items ?? [];
+      if (!this.items.length) return this.close(k, 1.5);
+      this.show(k);
+      this.lay = null;
+    }
+    layout() {
+      if (this.lay) return this.lay;
+      const w = 250, rows = [];
+      let y = 10;
+      for (const it of this.items) {
+        const lines = G.wrapRows(it.text, w - 56, BODY, 2), h = lines.length * 17 + 8;
+        rows.push({ it, lines, y, h }); y += h;
+      }
+      return (this.lay = { w, h: y + 8, rows });
+    }
+    size() { const L = this.layout(); return { w: L.w, h: L.h }; }
+    box() { return this.open && this.geo ? [this.geo.x, this.geo.y, this.geo.x + this.geo.w, this.geo.y + this.geo.h] : null; }
+    draw(ctx) {
+      if (!this.open || !this.geo) return;
+      const { x, y } = this.geo, L = this.layout(), fade = this.fade(), t = now();
+      ctx.save();
+      ctx.globalAlpha *= fade;
+      G.chrome(ctx, x, y, L.w, L.h);
+      L.rows.forEach((r, n) => {
+        const ra = clamp((this.age - 0.1 - n * 0.06) / 0.3, 0, 1);
+        if (ra <= 0) return;
+        const ry = y + r.y, ink = r.it.state === 'running' ? G.ACC : r.it.state === 'agent' ? '#b9a4ff' : '#3f8f88';
+        // The running one: its ring pulses outward.
+        if (r.it.state === 'running' && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          const p = (t % 1.2) / 1.2;
+          ctx.save(); ctx.globalAlpha *= 1 - p; ctx.strokeStyle = G.ACC; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x + 20, ry + 10, 5 + p * 6, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+        }
+        G.pen(ctx, G.ringPts(x + 20, ry + 10, 5, n * 2.1), ink, 2, ra / 0.3);
+        r.lines.forEach((ln, j) => G.typed(ctx, ln, x + 34, ry + 11 + j * 17, r.it.state === 'running' ? NOW : BODY, r.it.state === 'queued' ? G.DIM : G.TEXT, ra));
+      });
+      ctx.restore();
+    }
+  }
+
+    const orig = R.agentPlugin;
   R.agentPlugin = (k) => {
     const p = orig(k);
     if (!p) return p;
-    const trail = new Trail();
+    const trail = new Trail(), tasks = new Tasks();
     const shown = () => k.presence === 'shown' || (k.presence === 'in' && k.presU > 0.72);
     const { over, update, quiet, extent } = p;
-    p.quiet = () => !!quiet?.() && !trail.open;
+    p.quiet = () => !!quiet?.() && !trail.open && !tasks.open;
     p.extent = () => {
-      const e = extent?.(), t = shown() ? trail.box() : null;
-      if (!t) return e ?? null;
-      return e ? [Math.min(e[0], t[0]), Math.min(e[1], t[1]), Math.max(e[2], t[2]), Math.max(e[3], t[3])] : t;
+      const e = extent?.(), t = shown() ? trail.box() : null, u = shown() ? tasks.box() : null;
+      for (const b of [t, u]) {
+        if (!b) continue;
+        e ? (e = [Math.min(e[0], b[0]), Math.min(e[1], b[1]), Math.max(e[2], b[2]), Math.max(e[3], b[3])]) : (e = b);
+      }
+      return e;
     };
-    p.over = (ctx, env) => { over(ctx, env); if (shown()) trail.draw(ctx); };
+    p.over = (ctx, env) => { over(ctx, env); if (shown()) { trail.draw(ctx); tasks.draw(ctx); } };
     p.update = (dt, env) => {
       update(dt, env);
-      // The trail on the roomier side, away from a speech bubble beside it.
+      // The trail on the roomier side, away from a speech bubble beside it; the tasks strip stacks below the trail.
       const S = R.safe ?? { left: 0, right: 0 }, mid = (S.left + innerWidth - S.right) / 2;
       let side = k.m.x < mid ? 'right' : 'left';
       const bs = p.api?.bubble && !p.api.bubble.closing ? p.api.bubble.side : null;
       if (bs === side) side = side === 'right' ? 'left' : 'right';
       trail.update(dt, k, side, 0);
+      tasks.update(dt, k, side, trail.open && trail.geo ? trail.geo.h + 10 : 0);
     };
     if (p.api) {
       const keep = () => p.api.show?.({ summoned: true });
       p.api.cards = {
         trail: (e) => { keep(); trail.set(e, k); },
-        get open() { return trail.open; },
+        tasks: (e) => { keep(); tasks.set(e, k); },
+        get open() { return trail.open || tasks.open; },
       };
     }
     return p;
