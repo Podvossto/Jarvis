@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createWebFetchTool, createWebSearchTool, runSideWebSearch, runSideWebSearchViaClaudeCode } from '@kenkaiiii/ggcoder/web';
 import { z } from 'zod';
+import { createClock } from './clock.mjs';
 import { parseSipsSize, readProblem, rematch, sameBounds, shotFits, shotMap, shotProblem, shotUnits, snapRect, toScreen } from './pointing.mjs';
 import { ASK, BLOCK, checkDrawAction, checkFetch, checkOpen, checkRead, checkWrite, classifyCommand, isRiskyClick, isYes, riskyKind } from './safety.mjs';
 import { CARDS, DrawArgs, LIMITS, checkDraw, createParts, createPhotos, describeParts, faviconFor, pickTextMatch, quizNote, resolveTargets } from './draw.mjs';
@@ -229,7 +230,7 @@ export function sideSearchFor(route) {
 // Every request and redirect hop of web_fetch goes through safety.mjs, by name and by the addresses it resolves to.
 export const guardFetch = async (url) => { const v = await checkFetch(url); return v.level === BLOCK ? `Blocked for safety: ${v.reason}` : null; };
 
-export function createTools({ allowActions, ui, ask, openUrl, onCommitments, focus = null, firedReminders = () => [], showList, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: 'Roamies isn\'t running.' }), workdir = HOME, own = null, sideSearch = async () => null, pointScale = () => 'pixels' }) {
+export function createTools({ allowActions, ui, ask, openUrl, onCommitments, focus = null, firedReminders = () => [], showList, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: 'Roamies isn\'t running.' }), workdir = HOME, own = null, sideSearch = async () => null, pointScale = () => 'pixels', announce = () => {} }) {
   // Relative paths (and run_command) start in workdir: the home folder for the chat, its own folder for an agent.
   const at = (p) => { const s = String(p ?? ''); return /^~(?=$|\/|\\)/.test(s) || path.isAbsolute(s) || /^[a-z]:[\\/]/i.test(s) ? s : path.join(workdir, s); };
   const where = workdir === HOME ? "the user's home folder" : `its working folder (${workdir})`;
@@ -240,6 +241,8 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, foc
   let turn = 0;
   // Risky clicks the user allowed this request, as "app|kind": one Allow covers that kind in that app until the next request.
   let allowedClicks = { turn: -1, keys: new Set() };
+  // The clock widget's countdown (one at a time): the deadline lives here, so it fires even mid-request.
+  const clockState = { clock: createClock(), timeout: null };
   async function shotPoint(x, y) {
     const problem = shotProblem(lastShot, turn);
     if (problem) throw new Error(problem);
@@ -1010,6 +1013,42 @@ To close a card when asked, use close_card, not an edit. A drawing stays until t
         onCommitments(c);
         if (c.advanced) return `Ticked off this time. ${c.id} repeats ${repeatLabel(c.repeat)}; next due ${fmtWhen(c.due)}.`;
         return `${c.id} is now ${c.status}${c.due ? `, due ${fmtWhen(c.due)}` : ''}${c.repeat ? `, repeating ${repeatLabel(c.repeat)}` : ''}.`;
+      },
+    },
+    {
+      // The clock widget and its countdown (one at a time): the sidecar keeps the deadline and says when it's up.
+      name: 'clock',
+      description: 'The clock widget on their screen. {show: \'digital\' or \'analog\'} puts it up; when they say to time something ("จับเวลา 5 นาที", "set a 10-minute timer"), call it with {timer: {minutes, label: what it is for}} — minutes or seconds, one countdown at a time (a new one replaces the old) and I say when it is done. {cancel: true} cancels the countdown; {hide: true} takes the clock down.',
+      parameters: z.object({
+        show: z.enum(['digital', 'analog']).optional(),
+        hide: z.boolean().optional(),
+        cancel: z.boolean().optional(),
+        timer: z.object({ minutes: z.number().min(0.05).max(600).optional(), seconds: z.number().min(3).max(36_000).optional(), label: z.string().min(1).max(60).optional() }).optional(),
+      }),
+      execute: async ({ show, hide, cancel, timer }) => {
+        const clock = clockState.clock, fmt = (ms) => (ms < 60_000 ? `${Math.round(ms / 1000)} s` : `${+(ms / 60_000).toFixed(1)} min`);
+        let note = '';
+        if (cancel) { const old = clock.cancel(); clearTimeout(clockState.timeout); note = old ? 'Countdown cancelled.' : 'There was no countdown.'; }
+        const ev = { type: 'clock', show: show ?? null, timer: null, ...(hide ? { hide: true } : {}), ...(cancel ? { cancelled: true } : {}) };
+        if (timer) {
+          const ms = (timer.minutes ?? 0) * 60_000 + (timer.seconds ?? 0) * 1000;
+          if (!(ms >= 3000)) throw new Error('A countdown needs minutes or seconds (at least 3 seconds).');
+          const t = clock.start({ ...timer });
+          ev.timer = { endsAt: t.endsAt, label: t.label };
+          clearTimeout(clockState.timeout);
+          clockState.timeout = setTimeout(() => {
+            const d = clock.fire();
+            if (!d?.label) return;
+            ui({ kind: 'agent', e: { type: 'clock', done: d.label } });
+            announce(d.label);
+          }, ms + 300);
+          clockState.timeout.unref?.(); // a countdown never keeps the process alive
+          note = `Countdown set: ${fmt(ms)}${timer.label ? ` — ${timer.label}` : ''}. I'll say when it's done.`;
+        }
+        ui({ kind: 'agent', e: ev });
+        if (show) note = note || `Clock shows ${show === 'analog' ? 'analog' : 'digital'}.`;
+        if (hide) note = note || 'Clock hidden.';
+        return note || 'Clock updated.';
       },
     },
     {
