@@ -5,14 +5,16 @@
 import { z } from 'zod';
 import { checkUrl } from './safety.mjs';
 import { COUNTRIES } from './countries.mjs';
+import { AVAILABLE as CHARTS_AVAILABLE, LIMITS as CHART_LIMITS, TYPES as CHART_TYPES, checkChart, chartSvg } from './chart.mjs';
 
 export const LIMITS = { beats: 12, marks: 40, points: 200, parts3d: 40, atoms: 120, photoBytes: 800_000, iconBytes: 64_000,
-  nodes: 16, links: 24, columns: 6, rows: 12, bars: 12, labels: 8, pins: 12, shade: 40, routes: 8, steps: 10, tex: 300, vertices: 16, questions: 6, cardsShown: 4 };
+  nodes: 16, links: 24, columns: 6, rows: 12, bars: 12, labels: 8, pins: 12, shade: 40, routes: 8, steps: 10, tex: 300, vertices: 16, questions: 6, cardsShown: 4,
+  chartSeries: CHART_LIMITS.series, chartPoints: CHART_LIMITS.points, chartCategories: CHART_LIMITS.categories, chartSlices: CHART_LIMITS.slices };
 export const TONES = ['accent', 'teal', 'amber', 'coral', 'lilac', 'sky', 'lime', 'red', 'white'];
 // Marks on the real screen (they need a place on it), actions in apps, and cards drawn on calm space.
 export const SCREEN = ['point', 'target', 'hover', 'ring', 'frame', 'underline', 'strike', 'check', 'cross', 'connect', 'trace', 'num', 'label', 'write', 'scroll', 'spotlight', 'highlight', 'line', 'curve', 'arrow', 'circle', 'rect'];
 export const ACTIONS = ['emote', 'sfx', 'type', 'copy', 'open', 'handoff', 'button'];
-export const CARDS = ['card', 'note', 'list', 'mindmap', 'clip', 'sources', 'photo', 'graph', 'legend', 'timeline', 'molecule', 'model', 'flow', 'table', 'bars', 'map', 'math', 'geometry', 'quiz', 'ticket', 'medal'];
+export const CARDS = ['card', 'note', 'list', 'mindmap', 'clip', 'sources', 'photo', 'graph', 'chart', 'legend', 'timeline', 'molecule', 'model', 'flow', 'table', 'bars', 'map', 'math', 'geometry', 'quiz', 'ticket', 'medal'];
 export const KINDS = [...SCREEN, ...ACTIONS, ...CARDS];
 // Drawn from a list of points (screenshot pixels) instead of one place.
 const PATHS = new Set(['trace', 'line', 'curve', 'arrow']);
@@ -60,6 +62,19 @@ const Mark = z.object({
   columns: z.array(z.string().max(30)).max(LIMITS.columns).optional(),
   rows: z.array(z.array(z.string().max(80)).max(LIMITS.columns)).max(LIMITS.rows).optional(),
   bars: z.array(z.object({ label: z.string().min(1).max(30), value: num, tone: z.enum(TONES).optional() })).max(LIMITS.bars).optional(),
+  // The real-quality chart: its spec is rendered to an SVG in here (chart.mjs); the overlay only shows the picture.
+  chart: z.object({
+    type: z.enum(CHART_TYPES), title: z.string().min(1).max(60).optional(),
+    x: z.object({ categories: z.array(z.string().min(1).max(40)).max(LIMITS.chartCategories).optional(), label: z.string().max(30).optional(), unit: z.string().max(12).optional(), min: num.optional(), max: num.optional(), time: z.boolean().optional() }).optional(),
+    y: z.object({ label: z.string().max(30).optional(), unit: z.string().max(12).optional(), min: num.optional(), max: num.optional(), log: z.boolean().optional() }).optional(),
+    series: z.array(z.object({ name: z.string().min(1).max(40), data: z.array(z.any()).max(LIMITS.chartPoints).optional(), values: z.array(num).max(LIMITS.chartPoints).optional(),
+      tone: z.enum(TONES).optional(), dash: z.boolean().optional(), smooth: z.boolean().optional(), stack: z.string().max(20).optional(), points: z.boolean().optional() })).max(LIMITS.chartSeries).optional(),
+    stacked: z.boolean().optional(), bins: z.number().int().optional(),
+    slices: z.array(z.object({ name: z.string().min(1).max(40), value: num, tone: z.enum(TONES).optional() })).max(LIMITS.chartSlices).optional(),
+    grid: z.object({ x: z.array(z.string().min(1).max(30)).max(LIMITS.chartCategories), y: z.array(z.string().min(1).max(30)).max(LIMITS.chartCategories), z: z.array(z.array(num).max(LIMITS.chartCategories)).max(LIMITS.chartCategories) }).optional(),
+    lines: z.array(z.object({ x: num.optional(), y: num.optional(), text: z.string().max(30).optional(), tone: z.enum(TONES).optional() })).max(6).optional(),
+    notes: z.array(z.object({ x: num, y: num, text: z.string().min(1).max(40), tone: z.enum(TONES).optional() })).max(8).optional(),
+  }).optional(),
   unit: z.string().max(12).optional(),
   labels: z.array(z.object({ text: z.string().min(1).max(30), x: num, y: num })).max(LIMITS.labels).optional(),
   region: z.string().max(80).optional(),
@@ -163,6 +178,11 @@ const CHECKS = {
     m.bars.forEach((b, k) => { if (!Number.isFinite(b.value) || b.value < 0) out.push(`bar ${k + 1} ("${b.label}"): value must be 0 or more (for values below zero use graph).`); });
     if (!out.length && !m.bars.some((b) => b.value > 0)) out.push('every value is 0; at least one bar needs a value above 0.');
     return out;
+  },
+  chart(m) {
+    if (!m.chart) return ['needs chart (the spec).'];
+    if (!CHARTS_AVAILABLE.includes(m.chart.type)) return [`chart type "${m.chart.type}" isn't available yet (available: ${CHARTS_AVAILABLE.join(', ')}); use one of those.`];
+    return checkChart(m.chart);
   },
   labels(m) {
     const out = [];
@@ -300,6 +320,8 @@ export async function resolveTargets(beats, look) {
         if (m.tie && hasAt(m.tie)) o.tie = await resolveTarget(m.tie, look);
         if (PATHS.has(m.kind) && m.points?.length >= 2) o.points = await Promise.all(m.points.map(([x, y]) => look.pixel(x, y)));
         if (m.kind === 'molecule') o.mol = parseSmiles(m.smiles);
+        // The chart's picture is drawn here (offline): the overlay gets the finished SVG.
+        if (m.kind === 'chart') o.svg = chartSvg(m.chart);
         // The rest arrive already worked out, like a molecule: the overlay only lays them out.
         if (m.kind === 'flow') o.lay = flowLayers(m.nodes, m.links);
         if (m.kind === 'map') Object.assign(o, resolveRegion(m));
