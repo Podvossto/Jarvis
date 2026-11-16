@@ -150,38 +150,92 @@
     }
   }
 
-    const orig = R.agentPlugin;
+    // ---------- clock: the time of day, digital or analog, with the countdown ring when one runs ----------
+  class ClockW extends Card {
+    set(e, k) {
+      if (e.done !== undefined) { this.timer = null; this.doneAt = now(); k.S('done'); }
+      if (e.show) this.mode = e.show;
+      if (e.cancelled) this.timer = null;
+      if (e.timer) { this.timer = { ...e.timer, total: Math.max(1000, e.timer.endsAt - Date.now()) }; this.doneAt = null; if (!this.mode) this.mode = 'digital'; }
+      if (e.hide) { this.mode = null; this.timer = null; this.doneAt = null; return this.close(k, 0.4); }
+      if (this.mode || this.timer) this.show(k);
+    }
+    size() { return this.mode === 'analog' ? { w: 168, h: this.timer ? 236 : 196 } : { w: 150, h: this.timer ? 122 : 84 }; }
+    box() { return this.open && this.geo ? [this.geo.x, this.geo.y, this.geo.x + this.geo.w, this.geo.y + this.geo.h] : null; }
+    draw(ctx) {
+      if (!this.open || !this.geo) return;
+      const { x, y } = this.geo, { w, h } = this.size(), fade = this.fade(), t = now();
+      const d = new Date(), left = this.timer ? Math.max(0, this.timer.endsAt - Date.now()) : null;
+      const mmss = (ms) => `${String(Math.floor(ms / 60000)).padStart(2, '0')}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, '0')}`;
+      ctx.save();
+      ctx.globalAlpha *= fade;
+      G.chrome(ctx, x, y, w, h);
+      ctx.save(); ctx.beginPath(); ctx.rect(x + 2, y + 2, w - 4, h - 4); ctx.clip();
+      if (this.mode === 'analog') {
+        const cx = x + w / 2, cy = y + (this.timer ? 86 : 96), R = 62;
+        ctx.strokeStyle = G.DEEP; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+        for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2 - Math.PI / 2; ctx.strokeStyle = i % 3 ? G.DEEP : G.DIM; ctx.lineWidth = i % 3 ? 1.5 : 2.4; ctx.beginPath(); ctx.moveTo(cx + Math.cos(a) * (R - 7), cy + Math.sin(a) * (R - 7)); ctx.lineTo(cx + Math.cos(a) * (R - 2), cy + Math.sin(a) * (R - 2)); ctx.stroke(); }
+        const hand = (a, len, wdt, col) => { ctx.strokeStyle = col; ctx.lineWidth = wdt; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(cx - Math.cos(a) * 10, cy - Math.sin(a) * 10); ctx.lineTo(cx + Math.cos(a) * len, cy + Math.sin(a) * len); ctx.stroke(); };
+        const hs = ((d.getHours() % 12) + d.getMinutes() / 60) / 12 * Math.PI * 2 - Math.PI / 2, ms2 = (d.getMinutes() + d.getSeconds() / 60) / 60 * Math.PI * 2 - Math.PI / 2;
+        hand(hs, R * 0.5, 3.5, G.TEXT); hand(ms2, R * 0.74, 2.4, G.TEXT);
+        if (!matchMedia('(prefers-reduced-motion: reduce)').matches) { const ss = d.getSeconds() / 60 * Math.PI * 2 - Math.PI / 2; hand(ss, R * 0.8, 1.2, G.ACC); }
+        ctx.fillStyle = G.ACC; ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI * 2); ctx.fill();
+        if (this.timer) { const f = 1 - left / this.timer.total; ctx.strokeStyle = G.ACC; ctx.lineWidth = 3.5; ctx.beginPath(); ctx.arc(cx, cy, R + 6, -Math.PI / 2, -Math.PI / 2 + f * Math.PI * 2); ctx.stroke(); }
+      } else {
+        const big = `800 ${this.timer ? 30 : 34}px ${G.MONO}`;
+        G.typed(ctx, `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`, x + w / 2, y + (this.timer ? 38 : 46), big, G.TEXT, fade, { anchor: 'middle' });
+        G.typed(ctx, d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }), x + w / 2, y + (this.timer ? 60 : 68), HEAD, G.DIM, fade, { anchor: 'middle' });
+      }
+      if (this.timer) {
+        const urgent = left < 10_000 && !matchMedia('(prefers-reduced-motion: reduce)').matches && Math.floor(t * 2) % 2 === 0;
+        G.typed(ctx, mmss(left), x + w / 2, y + h - (this.mode === 'analog' ? 46 : 40), `800 ${urgent ? 22 : 20}px ${G.MONO}`, urgent ? G.CORAL : G.ACC, fade, { anchor: 'middle' });
+        if (this.timer.label) G.typed(ctx, G.ellipsize ? G.ellipsize(this.timer.label, w - 24) : String(this.timer.label).slice(0, 22), x + w / 2, y + h - 22, HEAD, G.DIM, fade, { anchor: 'middle' });
+      }
+      if (this.doneAt && t - this.doneAt < 3) {
+        const p = (t - this.doneAt) % 0.9 / 0.9;
+        ctx.save(); ctx.globalAlpha *= 1 - p; ctx.strokeStyle = G.CORAL; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x + w / 2, y + h / 2, 20 + p * 26, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+        G.typed(ctx, "TIME'S UP", x + w / 2, y + 16, HEAD, G.CORAL, (t - this.doneAt) / 0.3, { anchor: 'middle' });
+      }
+      ctx.restore();
+      ctx.restore();
+    }
+  }
+
+  const orig = R.agentPlugin;
   R.agentPlugin = (k) => {
     const p = orig(k);
     if (!p) return p;
-    const trail = new Trail(), tasks = new Tasks();
+    const trail = new Trail(), tasks = new Tasks(), clock = new ClockW();
     const shown = () => k.presence === 'shown' || (k.presence === 'in' && k.presU > 0.72);
     const { over, update, quiet, extent } = p;
     p.quiet = () => !!quiet?.() && !trail.open && !tasks.open;
     p.extent = () => {
-      const e = extent?.(), t = shown() ? trail.box() : null, u = shown() ? tasks.box() : null;
-      for (const b of [t, u]) {
+      const e = extent?.(), t = shown() ? trail.box() : null, u = shown() ? tasks.box() : null, c = shown() ? clock.box() : null;
+      for (const b of [t, u, c]) {
         if (!b) continue;
         e ? (e = [Math.min(e[0], b[0]), Math.min(e[1], b[1]), Math.max(e[2], b[2]), Math.max(e[3], b[3])]) : (e = b);
       }
       return e;
     };
-    p.over = (ctx, env) => { over(ctx, env); if (shown()) { trail.draw(ctx); tasks.draw(ctx); } };
+    p.over = (ctx, env) => { over(ctx, env); if (shown()) { trail.draw(ctx); tasks.draw(ctx); clock.draw(ctx); } };
     p.update = (dt, env) => {
       update(dt, env);
-      // The trail on the roomier side, away from a speech bubble beside it; the tasks strip stacks below the trail.
+      // The trail on the roomier side, away from a speech bubble beside it; the tasks strip stacks below the trail
+      // and the clock takes the other side.
       const S = R.safe ?? { left: 0, right: 0 }, mid = (S.left + innerWidth - S.right) / 2;
       let side = k.m.x < mid ? 'right' : 'left';
       const bs = p.api?.bubble && !p.api.bubble.closing ? p.api.bubble.side : null;
       if (bs === side) side = side === 'right' ? 'left' : 'right';
       trail.update(dt, k, side, 0);
       tasks.update(dt, k, side, trail.open && trail.geo ? trail.geo.h + 10 : 0);
+      clock.update(dt, k, side === 'right' ? 'left' : 'right', 0);
     };
     if (p.api) {
       const keep = () => p.api.show?.({ summoned: true });
       p.api.cards = {
         trail: (e) => { keep(); trail.set(e, k); },
         tasks: (e) => { keep(); tasks.set(e, k); },
+        clock: (e) => { keep(); clock.set(e, k); },
         get open() { return trail.open || tasks.open; },
       };
     }

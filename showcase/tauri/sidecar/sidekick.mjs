@@ -503,6 +503,7 @@ const { tools, hands, whereNow, frontNow: frontData, frontBounds, ink, nextTurn 
   onPlan: (args) => trail.plan(args),
   watchClicks: (on) => send({ type: 'watch_clicks', on: !!on }),
   onInkGone: (why) => logLine('ink_gone', { why }),
+  announce: (label) => { say(`Time is up: ${label}.`); enqueue(`(System, not ${userName}: the countdown for ${label} just finished. Tell them in one short sentence, in character, starting with the [done] tag.)`); },
   askShell: (msg) => shellCall(msg),
   pointScale: () => pointScale(config.model ?? ''),
   // web_search's side search runs on the chat's own Anthropic sign-in; other providers use the keyless engines.
