@@ -24,8 +24,9 @@ WEB_EXT=(--external:@mozilla/readability --external:turndown --external:turndown
   --banner:js="import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" \
   --log-level=warning
 # The readers and their dependencies, laid out as npm installed them (a nested copy travels with its parent).
-# One that's missing only costs web_fetch its Markdown: it falls back to plain text.
-node - linkedom @mozilla/readability turndown turndown-plugin-gfm unpdf <<'EOF'
+# One that's missing only costs web_fetch its Markdown: it falls back to plain text. wordcut's dictionary is
+# read from its folder at run time (thaitext.mjs), so the package travels too.
+node - linkedom @mozilla/readability turndown turndown-plugin-gfm unpdf wordcut <<'EOF'
 const fs = require('node:fs'), path = require('node:path');
 const done = new Set();
 function copy(name, from) {
