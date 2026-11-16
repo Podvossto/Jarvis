@@ -48,7 +48,7 @@ import { createSecrets, retryLoad, runInput } from './secrets.mjs';
 import { showTrayIcon } from './wintray.mjs';
 import { createActivity } from './activity.mjs';
 import { canCircle, canSnap, cleanMics, talkChords, hasHands, hasHotkeys, hasVoice, linuxSession, micTrouble, needsVoiceModel, platformLine, samePair, seesPointer, writeChord, writeChords } from './platform.mjs';
-import { accountKeys, keyCards, keyKinds, seesImages, signInCards } from './providers.mjs';
+import { accountKeys, glmKind, keyCards, keyKinds, keyTarget, seesImages, signInCards } from './providers.mjs';
 import { OLLAMA, connectLocal, contextNote, downNote, forgetLocal, newServer, noModelsNote, serverFor, serverList, syncLocal as syncServers, withWindow } from './local.mjs';
 import { activityLogs, buildReport, redact, reportDir, reportName, reveal, run, scrubConfig, tail } from './diagnostics.mjs';
 import { detailsText, explain } from './errors.mjs';
@@ -378,6 +378,13 @@ async function refreshAuth() {
   }
   for (const meta of AUTH_PROVIDERS.filter((x) => x.methods?.includes('apikey'))) {
     const kinds = keyKinds(meta);
+    if (meta.value === 'glm') {
+      // One saved key; the card that's on is the kind whose endpoint was saved with it.
+      const c = await auth.getCredentials('glm').catch(() => null);
+      for (const [id] of kinds) keyOn.set(id, !!c?.accessToken && glmKind(c) === id);
+      if (c?.accessToken) storedKeys.add('glm'); else storedKeys.delete('glm');
+      continue;
+    }
     for (const [id] of kinds) keyOn.set(id, await (kinds.length > 1 ? auth.hasCredentials(id) : auth.hasApiKey(id)).catch(() => false));
     for (const k of apiKeyStorageKeys(meta.value)) if (await auth.hasCredentials(k).catch(() => false)) storedKeys.add(k); else storedKeys.delete(k);
   }
@@ -510,7 +517,7 @@ tools.push({
   name: 'about_roamies',
   description: 'How Roamies works: where it lives, its menus, the panel and each settings page, updates, what to do when something is not working, and who made it. Call it before answering a question about the app.',
   parameters: z.object({}),
-  execute: async () => aboutRoamies({ name: lookName(), looks: LOOKS.map(([, label]) => label), mac: MAC, linux: LINUX, snap: SNAP_OK, pointer: POINTER_OK, voice: VOICE_OK, hotkeys: HOTKEYS_OK }),
+  execute: async () => aboutRoamies({ name: lookName(), looks: LOOKS.map(([, label]) => label), mac: MAC, linux: LINUX, snap: SNAP_OK, pointer: POINTER_OK, voice: VOICE_OK, hotkeys: HOTKEYS_OK, langs: NEEDS_MODEL ? SPEECH_LANGS.map((l) => l.name) : [], wake: WAKE_OK ? WAKE_PHRASE : null }),
 });
 // Background agents (agents.mjs): each runs in its own process on the model picked when it starts.
 let turnImage = null; // the picture sent with the request being answered, for send_agent's "snap"
@@ -654,12 +661,24 @@ const drawnLine = () => {
   try { d = ink.describe(); } catch { /* the drawing isn't set up yet */ }
   return d ? `- Drawn on screen now (close_card closes them): ${d}\n` : '';
 };
+// How it hears and speaks right now, where that's a choice (Windows and Linux): said with every request, so it
+// knows what it can do without looking it up (it used to deny having a wake word it had).
+const hearingLine = () => {
+  if (!VOICE_OK || !config.voice || !NEEDS_MODEL) return '';
+  const lang = SPEECH_LANGS.find((l) => l.id === config.speechLang)?.name ?? SPEECH_LANGS[0].name;
+  const others = SPEECH_LANGS.filter((l) => l.id !== config.speechLang).map((l) => l.name).join(' or ');
+  const wake = !WAKE_OK ? '' : config.wakeWord && wakeReady()
+    ? ` Wake word is ON: ${userName} can say "${WAKE_PHRASE}" to start talking hands-free, with no key (a request that still starts with "${WAKE_PHRASE}" or "Jarvis" is them waking you: ignore that part). They turn it off from the tray icon's menu or the Listening page.`
+    : ` You have a wake word, "${WAKE_PHRASE}", and it is OFF now: they turn it on from the tray icon's menu ("Listen for ${WAKE_PHRASE}") or the Listening page in ${PANEL}; you can't switch it yourself.`;
+  const voice = tts().local ? ' Your replies are spoken by a voice running on this computer (free, works offline).' : '';
+  return `- Hearing: you understand ${lang} speech now (${others} is the other choice, on the Listening page; one at a time).${wake}${voice}\n`;
+};
 const livePrompt = (context = '') => {
   const facts = pickFacts(context, 40), total = listFacts().length;
   lastFactIds = facts.map((f) => f.id);
   const open = commitmentsText(), done = doneTodayText(), working = agents.liveText();
   const turn = `Live state (current as of this moment):
-${frontNow ? `${frontNow}\n` : ''}${drawnLine()}${focusLine()}- Editing files, running commands and controlling other apps: ${config.allowActions ? 'ALLOWED' : `switched OFF (tell the user to turn on "Allow File Edits & Commands" on the General page in ${PANEL} if they want it)`}.
+${frontNow ? `${frontNow}\n` : ''}${drawnLine()}${hearingLine()}${focusLine()}- Editing files, running commands and controlling other apps: ${config.allowActions ? 'ALLOWED' : `switched OFF (tell the user to turn on "Allow File Edits & Commands" on the General page in ${PANEL} if they want it)`}.
 ${VOICE_OK ? `- Voice: ${!config.voice ? 'off' : voiceReady() ? `on; ${HOTKEYS_OK ? `${userName} holds ${talkWords()} to talk` : `${userName} presses the key they bound to ${BIND.talk} to start talking and again to send (a pause sends too)`}${config.autoListen ? '. Auto-listen is on: when your reply to a spoken question ends with a question, the mic opens by itself for their answer' : ''}${MAC && config.wakeWord ? `. Wake word is on: ${userName} can also say "Hey ${wakeName(config)}" to start talking hands-free, and what they say right after it is the request (a request that still starts with "Hey ${wakeName(config)}" is them waking you, not calling you by another name: never correct it)${config.wakeName ? ` (they chose "${config.wakeName}" as the wake word; your own name is unchanged)` : ''}` : ''}` : `on, but the speech model isn't downloaded yet (${voiceModel.status === 'downloading' ? 'downloading now' : `the Voice page in ${PANEL}`})`}.` : ''}
 - Shortcuts: ${HOTKEYS_OK ? `${keys().write ? `type a question to you: a quick tap of ${writeWords()} (press both and let go), which opens a text field beside the cursor (Enter sends, Shift+Enter adds a line, Esc or another tap closes it)` : `the tap that opens a text field to type a question is turned off (the Ask button in ${PANEL} still opens it; the Shortcuts page there turns the tap back on)`}; show or hide you ${keyWords(keys().summon)}` : `on this Wayland desktop no app can have global shortcuts, so ${userName} binds keys to these commands in their desktop's keyboard settings: ${BIND.summon} (show or hide you), ${BIND.ask} (ask you), ${BIND.list} (the list), ${BIND.talk} (talk) and ${BIND.panel} (the panel)`}${SNAP_OK ? `; ask about an area ${keyWords(keys().snap)}` : ''}${CIRCLE_OK ? "; while holding the talk keys, moving the cursor round something circles it (no clicking; it snaps shut with a click when the circle closes, and loose lines don't count) and you'll see what they circled" : ''}${HOTKEYS_OK ? `; show the list ${keyWords(keys().list)}` : ''}.${HANDS_OK ? '' : ' Asking about an area, reading app windows, finding things on screen by their words and working other apps need the Roamies app, which isn\'t running here; draw there with x, y from a screenshot.'}`;
   const memory = `${open ? `Open commitments:\n${open}` : 'No open commitments.'}${done ? `\nDone today (ticked off on the list or by you; still shown struck through until midnight):\n${done}` : ''}
@@ -1373,15 +1392,16 @@ async function oauthLogin(provider, id = `l${++loginSeq}`) {
 
 // `id`: a provider, or one kind of its key ('kimi-code' vs 'moonshot', as keyKinds lists them).
 async function apiKeyLogin(id, given) {
-  const provider = storageKeyProvider(id);
+  const target = keyTarget(id); // GLM: plan or pay-per-token, one saved key with the endpoint it works on
+  const provider = target?.provider ?? storageKeyProvider(id);
   const meta = AUTH_PROVIDERS.find((p) => p.value === provider);
   if (!meta?.methods?.includes('apikey')) return;
-  const variant = meta.apiKeyVariants?.find((v) => v.key === id) ?? (id === provider ? meta.apiKeyVariants?.[0] : null);
+  const variant = target ? undefined : meta.apiKeyVariants?.find((v) => v.key === id) ?? (id === provider ? meta.apiKeyVariants?.[0] : null);
   if (variant === null) return;
   const key = given ?? (await ask({ prompt: `Paste your ${PROVIDER_LABELS[provider] ?? provider} API key`, placeholder: 'API key', mask: true }));
   if (!key?.trim()) return;
-  const baseUrl = variant?.baseUrl ?? meta.apiKeyBaseUrl;
-  await auth.setCredentials(variant?.key ?? provider, { accessToken: key.trim(), refreshToken: '', expiresAt: Date.now() + 100 * 365 * 864e5, ...(baseUrl ? { baseUrl } : {}) });
+  const baseUrl = target?.baseUrl ?? variant?.baseUrl ?? meta.apiKeyBaseUrl;
+  await auth.setCredentials(target?.key ?? variant?.key ?? provider, { accessToken: key.trim(), refreshToken: '', expiresAt: Date.now() + 100 * 365 * 864e5, ...(baseUrl ? { baseUrl } : {}) });
   await refreshAuth(); ensureModel(); agent = null;
   if (CATALOG_PROVIDERS.includes(provider)) refreshCatalogs(provider);
   // A Gemini key for the AI speaks too, unless the voice has a key of its own.
@@ -2425,7 +2445,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   else if (m.type === 'panel_key' && typeof m.provider === 'string' && typeof m.key === 'string') {
     const id = typeof m.kind === 'string' ? m.kind : m.provider;
     const label = PROVIDER_LABELS[m.provider] ?? m.provider;
-    if (storageKeyProvider(id) !== m.provider) return;
+    if ((keyTarget(id)?.provider ?? storageKeyProvider(id)) !== m.provider) return;
     apiKeyLogin(id, m.key.slice(0, 1000)).then(() => panelNote(signedIn.get(m.provider) ? `${label} is connected.` : `That ${label} key didn't work.`, !signedIn.get(m.provider)))
       .catch((e) => { const p = problem('key', e, { store: KEY_STORE }); panelNote(p.text, true, p); });
   } else if (m.type === 'panel_local_add' && typeof m.label === 'string' && typeof m.baseUrl === 'string') {

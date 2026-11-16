@@ -146,4 +146,13 @@ assert.match(detailsText(undefined), /^Roamies error \? \(\?\)/, 'nothing to rep
   assert.deepEqual(side.split('\n').flatMap((l, i) => (/\b(const|let|var)\s+problem\b/.test(l) ? [i + 1] : [])), [], 'nothing in sidekick.mjs hides problem()');
 }
 
+// Z.AI's 1113 arrives as a 429 with "usage limit reached" in front of it: it's the key's type or balance, not a limit.
+{
+  const raw = 'ProviderError: usage limit reached: Insufficient balance or no resource package. Please recharge. <- 429 Insufficient balance or no resource package. Please recharge. [code=1113 status=429]';
+  const p = explain('reply', new Error(raw));
+  assert.equal(p.code, 'E29');
+  assert.match(p.text, /key type/);
+  assert.equal(explain('reply', new Error('429 Too Many Requests')).code, 'E24', 'a real limit is still a limit');
+  assert.equal(explain('reply', new Error("You've hit your 5-hour limit · resets 10:50pm")).code, 'E24', "Claude's plan limit is a limit, not an unknown error");
+}
 console.log('errors tests: passed');

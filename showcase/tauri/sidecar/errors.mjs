@@ -40,8 +40,11 @@ const AREAS = {
     known: [
       ['E21', /Claude Code isn't installed/i, () => 'Claude Code is missing. Sign in with Claude again.', false, 'model'],
       ['E22', /not logged in|NotLoggedIn|\b401\b|unauthori[sz]ed|invalid_grant|token refresh failed|authentication_error|(?:invalid|incorrect).{0,6}api.?key/i, (c) => `My ${c.who} login stopped working. Sign in again.`, false, 'model'],
+      // Z.AI's 1113: the key has no balance or plan on the endpoint it was sent to (a Coding Plan key saved as a
+      // pay-per-token one, or the other way round). It comes as a 429, which used to read as a usage limit.
+      ['E29', /no resource package|insufficient balance|\b1113\b/i, () => 'This key has no plan or credit here. Check its key type.', false, 'model'],
       ['E23', /insufficient_quota|credit balance|billing|payment required|\b402\b/i, () => 'This account is out of credit. Top up or switch model.', false, 'model'],
-      ['E24', /usage.?limit|quota|rate.?limit|\b429\b|too many requests/i, () => "I've hit this model's usage limit. Pick another model.", false, 'model'],
+      ['E24', /usage.?limit|quota|rate.?limit|\b429\b|too many requests|\d+-hour limit|weekly limit/i, () => "I've hit this model's usage limit. Pick another model.", false, 'model'],
       ['E25', /context.{0,20}(?:length|window)|prompt is too long|too many tokens|maximum context/i, () => 'This chat got too long. Start a new one.'],
       ['E26', /model_not_found|model.{0,40}(?:not found|does not exist|not available|not supported)/i, () => "That model isn't available. Pick another one.", false, 'model'],
       ['E27', /overloaded|\b5(?:0[0234]|29)\b|service unavailable|bad gateway|internal server error/i, (c) => `${c.who} is having trouble right now. Try again soon.`],
