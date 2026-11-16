@@ -669,7 +669,7 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, foc
         else for (const p of parts.trimCards(args.deep ? 1 : LIMITS.cardsShown, (q) => loose.has(q) || pinned.has(q))) { shut.push(p); buttons.delete(p); }
         for (const b of seg) for (const m of b.marks) if (m.action && m.part) buttons.set(m.part, m.action);
         for (const b of seg) for (const m of b.marks) if (m.kind === 'quiz' && m.part) quizzes.set(m.part, m);
-        const out = seg.map((b, j) => ({ ...b, n: sg.from + j + 1, caption: plain(b.say), voiced: !!speak(b.say) }));
+        const out = seg.map((b, j) => ({ ...b, n: sg.from + j + 1, caption: plain(b.say ?? ''), voiced: !!(b.say && speak(b.say)) }));
         said.push(...out.map((b) => b.caption));
         ui({ kind: 'agent', e: { type: 'draw', id, seg: k, beats: out, edits: k ? [] : edits, last: k === segs.length - 1, win, busy: k ? [] : busy, ...(opts.fade ? { fade: opts.fade } : {}), ...(args.deep ? { deep: true } : {}) } });
         // The first beat must show; later ones queue behind it on the overlay without holding this up.
@@ -1050,6 +1050,13 @@ To close a card when asked, use close_card, not an edit. A drawing stays until t
         if (hide) note = note || 'Clock hidden.';
         return note || 'Clock updated.';
       },
+    },
+    {
+      // The free-form card: their own HTML in a sandboxed frame — no network, no files, no navigation; close_card closes it.
+      name: 'show_html',
+      description: 'Show your own HTML on screen as a card, for anything the fixed card kinds can\'t draw (a custom diagram, an interactive widget, a styled layout). {html: the markup} — inline styles and <script> run in a sandbox that cannot touch the network or files, so everything must be self-contained (embed data as data: URLs). {title: a few words for the card\'s bar}. It stays up until closed (close_card, or they say to close it); a second call shows another card. Not for plain text, a list or a table: those kinds draw them better.',
+      parameters: z.object({ html: z.string().min(1).max(LIMITS.htmlChars), title: z.string().min(1).max(60).optional() }),
+      execute: async (args, ctx) => draw({ beats: [{ marks: [{ kind: 'html', html: args.html, title: args.title }] }] }, ctx),
     },
     {
       // Saved the moment it's asked for: waiting for the conversation to be folded could take days.
