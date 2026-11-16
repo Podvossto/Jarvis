@@ -18,6 +18,7 @@
 mod audio;
 mod ink;
 mod keys;
+mod typhoon;
 
 use audio::{MicError, Sink, Source};
 use parakeet_rs::{ExecutionConfig, ParakeetTDT, Transcriber};
@@ -63,29 +64,64 @@ struct Job {
     last: bool,
 }
 
-fn model_present(dir: &Path) -> bool {
+/// The speech model in use: which one is decided by the files in the model folder (the app picks the folder
+/// from the language the user chose).
+enum Asr {
+    Parakeet(ParakeetTDT),
+    Typhoon(typhoon::Typhoon),
+}
+
+impl Asr {
+    fn name(&self) -> &'static str {
+        match self {
+            Asr::Parakeet(_) => "parakeet",
+            Asr::Typhoon(_) => "typhoon",
+        }
+    }
+
+    fn read(&mut self, audio: Vec<f32>) -> Result<String, String> {
+        match self {
+            Asr::Parakeet(m) => m.transcribe_samples(audio, RATE, 1, None).map(|r| r.text).map_err(|e| e.to_string()),
+            Asr::Typhoon(m) => m.transcribe(&audio),
+        }
+    }
+}
+
+fn parakeet_present(dir: &Path) -> bool {
     dir.join("vocab.txt").is_file() && dir.join("encoder-model.int8.onnx").is_file() && dir.join("decoder_joint-model.int8.onnx").is_file()
 }
 
-fn load_model(dir: &Path) -> Result<ParakeetTDT, String> {
+fn model_present(dir: &Path) -> bool {
+    parakeet_present(dir) || typhoon::present(dir)
+}
+
+fn engine_name(dir: &Path) -> &'static str {
+    if typhoon::present(dir) { "typhoon" } else { "parakeet" }
+}
+
+fn load_model(dir: &Path) -> Result<Asr, String> {
     // Half the cores: quick enough to read a minute of speech in a second or two, without starving the PC.
     let threads = thread::available_parallelism().map(|n| n.get() / 2).unwrap_or(2).clamp(1, 8);
     let t0 = Instant::now();
     let env = parakeet_rs::ort::init().with_name("roamies-voice").build().map_err(|e| e.to_string())?;
     let config = ExecutionConfig::new().with_environment(env).with_intra_threads(threads);
-    let mut asr = ParakeetTDT::from_pretrained(dir, Some(config)).map_err(|e| e.to_string())?;
+    let mut asr = if typhoon::present(dir) {
+        Asr::Typhoon(typhoon::Typhoon::load(dir, &config)?)
+    } else {
+        Asr::Parakeet(ParakeetTDT::from_pretrained(dir, Some(config)).map_err(|e| e.to_string())?)
+    };
     // One short warm-up run, so the first real request doesn't pay for ONNX Runtime's setup.
-    let _ = asr.transcribe_samples(vec![0.0; RATE as usize / 2], RATE, 1, None);
-    log(&format!("model ready in {:.1}s ({threads} threads)", t0.elapsed().as_secs_f64()));
+    let _ = asr.read(vec![0.0; RATE as usize / 2]);
+    log(&format!("{} model ready in {:.1}s ({threads} threads)", asr.name(), t0.elapsed().as_secs_f64()));
     Ok(asr)
 }
 
-fn transcribe(asr: &mut ParakeetTDT, audio: Vec<f32>) -> String {
+fn transcribe(asr: &mut Asr, audio: Vec<f32>) -> String {
     if audio.len() < RATE as usize / 5 {
         return String::new();
     }
-    match asr.transcribe_samples(audio, RATE, 1, None) {
-        Ok(r) => r.text.split_whitespace().collect::<Vec<_>>().join(" "),
+    match asr.read(audio) {
+        Ok(text) => text.split_whitespace().collect::<Vec<_>>().join(" "),
         Err(e) => {
             log(&format!("transcribe: {e}"));
             String::new()
@@ -693,7 +729,7 @@ fn main() {
         let _ = stdin_tx.send(Ev::StdinClosed);
     });
 
-    emit(json!({ "type": "ready", "engine": "parakeet", "model": voice.engine.is_some() }));
+    emit(json!({ "type": "ready", "engine": model.as_deref().map(engine_name).unwrap_or("parakeet"), "model": voice.engine.is_some() }));
     loop {
         let quit = match rx.recv_timeout(Duration::from_millis(16)) {
             Ok(ev) => {

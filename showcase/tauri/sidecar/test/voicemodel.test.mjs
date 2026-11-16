@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { downloadModel, isReady, totalBytes } from '../voicemodel.mjs';
+import { MODEL, MODELS, SPEECH_LANGS, TYPHOON, downloadModel, isReady, modelDir, speechModel, totalBytes } from '../voicemodel.mjs';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'roamies-model-test-'));
 process.on('exit', () => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -77,6 +77,24 @@ assert.equal(isReady(dir2, model), false);
 const ac = new AbortController(); ac.abort();
 await assert.rejects(downloadModel(path.join(TMP, 'd'), { ...opts, signal: ac.signal }), (e) => e.code === 'aborted');
 await assert.rejects(downloadModel(path.join(TMP, 'e'), { ...opts, model: { ...model, files: [{ name: 'missing.bin', size: 5, sha256: 'x' }] }, retries: 1 }), (e) => e.code === 'network');
+
+// A file saved under another name than the server's (`from`): fetched by `from`, kept as `name`.
+requests = [];
+const renamed = { ...model, id: 'renamed', files: [{ name: 'vocab.json', from: 'vocab.txt', size: B.length, sha256: sha(B) }] };
+const dirF = path.join(TMP, 'f');
+await downloadModel(dirF, { ...opts, model: renamed });
+assert.deepEqual(requests.map((r) => r.url), ['/vocab.txt']);
+assert.deepEqual(fs.readFileSync(path.join(dirF, 'vocab.json')), B);
+assert.equal(isReady(dirF, renamed), true);
+
+// The language spoken picks the model: Thai is Typhoon and the default, English is Parakeet, anything else Thai.
+assert.equal(speechModel('th'), TYPHOON);
+assert.equal(speechModel('en'), MODEL);
+assert.equal(speechModel('xx'), TYPHOON);
+assert.equal(speechModel(undefined), TYPHOON);
+assert.deepEqual(SPEECH_LANGS.map((l) => l.id).sort(), Object.keys(MODELS).sort());
+assert.notEqual(modelDir(TYPHOON), modelDir(MODEL)); // side by side, so switching back needs no download
+for (const m of Object.values(MODELS)) for (const f of m.files) assert.match(f.sha256, /^[0-9a-f]{64}$/);
 
 server.close();
 console.log('voice model download tests: passed');

@@ -34,7 +34,7 @@ import { saveCardImage } from './cardimage.mjs';
 import { cleanWakeName, wakeName } from './wakename.mjs';
 import { KEY_NAME as SYNC_KEY, MIN_PASSPHRASE, checkFolder, folderReady, merge as syncMerge, newDevice, prepareFolder, readRemotes, suggestFolders, tooMuchGone, writeOwn } from './sync.mjs';
 import { EMOTES, EchoFilter, ReplyStream } from './reply.mjs';
-import { downloadModel, isReady, modelDir, sizeLabel, totalBytes } from './voicemodel.mjs';
+import { DEFAULT_SPEECH_LANG, SPEECH_LANGS, downloadModel, isReady, modelDir, sizeLabel, speechModel, totalBytes } from './voicemodel.mjs';
 import { copyText, createTools, expand, fitImage, imageBlock, winOpen } from './tools.mjs';
 import { describeMarks } from './marks.mjs';
 import { faviconFor } from './draw.mjs';
@@ -103,7 +103,7 @@ const DEFAULT_KEYS = process.platform === 'win32'
   : { talk: ['control', 'option'], summon: 'Control+Alt+KeyS', snap: 'Control+Alt+KeyA', list: 'Control+Alt+KeyL' };
 const DEFAULTS = {
   provider: null, model: null, sound: true, allowActions: false, voice: true,
-  onboarded: false, onboardStep: 0, filesAsked: false, keys: DEFAULT_KEYS, muteWhileTalking: true, autoListen: false, wakeWord: false, setupVersion: 0, size: 'default', look: 'classic', introDone: false,
+  onboarded: false, onboardStep: 0, filesAsked: false, keys: DEFAULT_KEYS, muteWhileTalking: true, speechLang: DEFAULT_SPEECH_LANG, autoListen: false, wakeWord: false, setupVersion: 0, size: 'default', look: 'classic', introDone: false,
   replies: 'text', // 'voice': spoken (with Fish Audio or Gemini) as well as shown
   tts: 'fish', // which one speaks: 'fish' (Fish Audio), 'gemini' or 'voicestudio' (the VoiceStudio app on this computer)
   studioVoices: {}, // look → its VoiceStudio voice (a saved profile id; none: the selected engine's default voice)
@@ -146,8 +146,14 @@ const VOICE_OK = hasVoice(process.platform);
 // Windows and Linux have no on-device speech API apps can use, so voice there runs Parakeet on the PC. Its model
 // is downloaded once: from the setup guide, or the first time voice is used.
 const NEEDS_MODEL = needsVoiceModel(process.platform);
-const MODEL_DIR = modelDir();
-const voiceModel = { status: !NEEDS_MODEL || isReady(MODEL_DIR) ? 'ready' : 'missing', done: 0, total: totalBytes(), error: null };
+// Which model depends on the language the user speaks to it (config.speechLang): pickSpeechModel() sets these
+// once the settings are read, and again when the language changes.
+let MODEL = speechModel(DEFAULT_SPEECH_LANG), MODEL_DIR = modelDir(MODEL);
+const voiceModel = { status: NEEDS_MODEL ? 'missing' : 'ready', done: 0, total: totalBytes(MODEL), error: null };
+function pickSpeechModel() {
+  MODEL = speechModel(config.speechLang); MODEL_DIR = modelDir(MODEL);
+  Object.assign(voiceModel, { status: !NEEDS_MODEL || isReady(MODEL_DIR, MODEL) ? 'ready' : 'missing', done: 0, total: totalBytes(MODEL), error: null });
+}
 const voiceReady = () => voiceModel.status === 'ready';
 let config = { ...DEFAULTS };
 let diagnosing = false; // a diagnostics file is being made (diagnostics.mjs)
@@ -155,6 +161,7 @@ let shellInfo = null; // resolves the shell's reply to it: screens, tray, panel,
 {
   const saved = readJson(CONFIG_PATH, { backup: true }); // an unreadable file is set aside, never overwritten
   if (saved && typeof saved === 'object' && !Array.isArray(saved)) config = { ...DEFAULTS, ...saved };
+  pickSpeechModel();
   // Before voices were per look: the one picked becomes the current look's.
   for (const [one, each] of [['geminiVoice', 'geminiVoices'], ['studioVoice', 'studioVoices']]) {
     if (!(one in config)) continue;
@@ -1874,9 +1881,11 @@ function panelState() {
     studio: tts().local ? studioState() : null,
     voice: VOICE_OK ? {
       on: !!config.voice, keys: HOTKEYS_OK ? talkSymbols() : null, ready: voiceReady(), mac: MAC, mute: config.muteWhileTalking !== false, autoListen: !!config.autoListen, snoozeListen: !!config.snoozeListen, wakeWord: !!config.wakeWord, wakeName: wakeName(config),
+      // The language it listens for (Windows and Linux, where the speech model is picked by language).
+      lang: NEEDS_MODEL ? (SPEECH_LANGS.some((l) => l.id === config.speechLang) ? config.speechLang : DEFAULT_SPEECH_LANG) : null, langs: NEEDS_MODEL ? SPEECH_LANGS : [],
       // The mic picker: what the voice helper lists, the pick ('' is automatic) and the mic automatic uses now.
       mics: mics.list, mic: config.mic ?? '', micAuto: mics.list.find((x) => x.id === mics.auto)?.name ?? '',
-      download: NEEDS_MODEL && config.voice && !voiceReady() ? { status: voiceModel.status, pct: voiceModel.total ? Math.floor((voiceModel.done / voiceModel.total) * 100) : 0, size: sizeLabel() } : null,
+      download: NEEDS_MODEL && config.voice && !voiceReady() ? { status: voiceModel.status, pct: voiceModel.total ? Math.floor((voiceModel.done / voiceModel.total) * 100) : 0, size: sizeLabel(MODEL) } : null,
     } : null,
     sound: !!config.sound, actions: !!config.allowActions, brief: { on: !!config.morningBrief, todoist: !!config.briefTodoist, canTodoist: HANDS_OK }, focus: HANDS_OK ? { until: focusBlock?.until ?? null, task: focusBlock?.task ?? '', list: distractionList(), custom: !!config.distractions } : null, sync: { dir: config.syncDir || '', at: syncInfo.at, error: syncInfo.error, paused: !!syncInfo.paused }, gameMode: HANDS_OK ? config.gameSidebar !== false : null,
     login: login.supported ? { on: login.on } : null,
@@ -1897,7 +1906,7 @@ function modelUpdate(force) {
   if (!force && now - modelShownAt < 300) return;
   modelShownAt = now;
   const { status, done, total, error } = voiceModel;
-  ob({ kind: 'voice_model', status, done, total, error, size: sizeLabel() });
+  ob({ kind: 'voice_model', status, done, total, error, size: sizeLabel(MODEL) });
   if (force || now - modelMenuAt > 3000) { modelMenuAt = now; menu(); }
 }
 async function getVoiceModel() {
@@ -1906,7 +1915,7 @@ async function getVoiceModel() {
   logLine('voice_model', { phase: 'start', dir: MODEL_DIR });
   modelUpdate(true);
   try {
-    await downloadModel(MODEL_DIR, { onProgress: ({ done, total }) => { voiceModel.done = done; voiceModel.total = total; modelUpdate(false); } });
+    await downloadModel(MODEL_DIR, { model: MODEL, onProgress: ({ done, total }) => { voiceModel.done = done; voiceModel.total = total; modelUpdate(false); } });
     voiceModel.status = 'ready';
     logLine('voice_model', { phase: 'ready' });
     voiceConfig();
@@ -1914,15 +1923,26 @@ async function getVoiceModel() {
   } catch (e) {
     voiceModel.status = 'error';
     // Short: it's one line in the setup guide's row.
-    voiceModel.error = e.code === 'disk' ? `Not enough disk space (needs ${sizeLabel()}).` : e.code === 'checksum' ? 'Download was damaged. Try again.' : 'Download failed. Check your internet.';
+    voiceModel.error = e.code === 'disk' ? `Not enough disk space (needs ${sizeLabel(MODEL)}).` : e.code === 'checksum' ? 'Download was damaged. Try again.' : 'Download failed. Check your internet.';
     logLine('voice_model', { phase: 'error', code: e.code, message: String(e.message ?? e).slice(0, 200) });
     if (!onboarding) say(`I couldn't download my voice. ${voiceModel.error}`, 'concerned');
   }
   modelUpdate(true);
 }
+// The language spoken to it: swaps the speech model (the voice helper restarts with the other one), fetching it
+// first if it isn't on this computer yet. Not while a model is on its way down: that download would be lost.
+function setSpeechLang(lang) {
+  if (!SPEECH_LANGS.some((l) => l.id === lang) || lang === config.speechLang) return;
+  if (voiceModel.status === 'downloading') return say('One moment: a voice model is still downloading.', 'concerned');
+  config.speechLang = lang; saveConfig();
+  pickSpeechModel();
+  logLine('speech_lang', { lang, ready: voiceReady() });
+  voiceConfig(); menu();
+  if (config.voice && !voiceReady()) getVoiceModel();
+}
 const startVoiceDownload = () => {
   if (voiceModel.status === 'downloading') return say(`Still downloading my voice: ${Math.floor((voiceModel.done / voiceModel.total) * 100)}% done.`, 'happy');
-  say(`Downloading my voice (${sizeLabel()}, just this once). I'll tell you when it's ready.`, 'happy');
+  say(`Downloading my voice (${sizeLabel(MODEL)}, just this once). I'll tell you when it's ready.`, 'happy');
   getVoiceModel();
 };
 const PRIVACY = { microphone: 'Privacy_Microphone', speech: 'Privacy_SpeechRecognition' };
@@ -2117,6 +2137,7 @@ async function onMenu(id, via) {
   else if (id === 'snap') areaSnap();
   else if (id === 'list') showList({ seconds: 20 });
   else if (id.startsWith('mic:') && VOICE_OK) { config.mic = id.slice(4, 304); saveConfig(); micPick(); menu(); }
+  else if (id.startsWith('lang:') && NEEDS_MODEL) setSpeechLang(id.slice(5));
   else if (id === 'mutetalk') { config.muteWhileTalking = config.muteWhileTalking === false; saveConfig(); voiceConfig(); menu(); }
   else if (id === 'autolisten') { config.autoListen = !config.autoListen; saveConfig(); menu(); }
   else if (id === 'snoozelisten') { config.snoozeListen = !config.snoozeListen; saveConfig(); menu(); }
@@ -2269,7 +2290,7 @@ function obState() {
     voice: VOICE_OK && config.voice,
     autoListen: !!config.autoListen,
     wakeWord: MAC && !!config.wakeWord,
-    voiceModel: NEEDS_MODEL ? { status: voiceModel.status, done: voiceModel.done, total: voiceModel.total, error: voiceModel.error, size: sizeLabel() } : null,
+    voiceModel: NEEDS_MODEL ? { status: voiceModel.status, done: voiceModel.done, total: voiceModel.total, error: voiceModel.error, size: sizeLabel(MODEL) } : null,
     filesAsked: config.filesAsked,
     look: config.look ?? 'classic',
     size: sizeNow(),
