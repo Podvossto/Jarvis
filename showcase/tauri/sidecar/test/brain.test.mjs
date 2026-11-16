@@ -1,6 +1,6 @@
 // Side calls: which model folds and learns, the retry, the transcript they read, and what's kept of their reply.
 import assert from 'node:assert/strict';
-import { foldInput, foldPrompt, memoryInput, memoryPrompt, oneShot, parseBrain, sideThinking, summaryModelFor, transcript } from '../brain.mjs';
+import { cleanFact, foldInput, foldPrompt, memoryInput, memoryPrompt, oneShot, parseBrain, sideThinking, summaryModelFor, transcript } from '../brain.mjs';
 
 // The summary model is gg-core's cheaper pick, unless the current model is cheaper still.
 assert.equal(summaryModelFor('anthropic', 'claude-opus-5-5'), 'claude-sonnet-5-5', 'Opus folds on Sonnet');
@@ -37,6 +37,12 @@ assert.equal(sideThinking('huggingface', 'deepseek-ai/DeepSeek-V4.1-Flash', 'low
     { text: 'Ken has a dog called Rex' },
   ], 'secrets, card numbers and scraps are dropped');
   assert.deepEqual(parseBrain('Sure! {"facts": []}').facts, [], 'nothing new');
+  // A fact saved on request goes through the same filter: tidied, and never a secret.
+  assert.equal(cleanFact('  ผมชอบ\n กาแฟดำ '), 'ผมชอบ กาแฟดำ');
+  assert.equal(cleanFact('My card is 4111 1111 1111 1111'), null);
+  assert.equal(cleanFact('My wifi password is hunter2'), null);
+  assert.equal(cleanFact('ok'), null);
+  assert.equal(cleanFact(42), null);
   assert.throws(() => parseBrain('no json here'), /no JSON/);
   assert.throws(() => parseBrain('{"facts": []}', { wantSummary: true }), /no summary/, 'a fold needs its summary');
   assert.ok(!/sk-ant/.test(parseBrain('{"summary": "They pasted sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 by mistake and were told to rotate it."}', { wantSummary: true }).summary), 'the summary is redacted too');
