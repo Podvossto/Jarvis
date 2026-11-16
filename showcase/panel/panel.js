@@ -822,7 +822,41 @@
   }
 
   // ---------------------------------------------------------------- render
-  const PANES = { home, memory, model: modelPage, appearance: appearancePage, speaking: speakingPage, listening: listeningPage, shortcuts: shortcutsPage, routines: routinesPage, general: generalPage, about: aboutPage, whatsnew: whatsNewPage };
+  // ---------------------------------------------------------------- usage
+  // What each provider and model cost in tokens today, the week at a glance, and where this conversation sits in its
+  // context budget. The numbers come with the state (usageState in sidekick.mjs); Claude's quota rides along when the
+  // Claude Code route has reported its rate limits.
+  const kfmt = (n) => (n >= 1000 ? `${+(n / 1000).toFixed(1)}k` : String(n ?? 0));
+  function usagePage() {
+    const u = state.usage;
+    if (!u) return [group('Usage', 'What I use: tokens per provider and model, and how much of my context window this conversation has taken. Nothing yet today.', null)];
+    const row = (r) => el('div', { className: 'urow' },
+      el('span', { className: 'uname', textContent: `${r.label} · ${r.model}` }),
+      el('span', { className: 'unum', textContent: `${r.requests} request${r.requests === 1 ? '' : 's'}` }),
+      el('span', { className: 'unum', textContent: `${kfmt(r.in)} in · ${kfmt(r.out)} out` }));
+    const maxTokens = Math.max(1, ...u.week.map((d) => d.in + d.out));
+    const day = (d, i) => {
+      const total = d.in + d.out, when = i === 6 ? 'Today' : i === 5 ? 'Yesterday' : d.day.split(' ').slice(1).join(' ');
+      return el('div', { className: 'urow' },
+        el('span', { className: 'uname', textContent: when }),
+        el('span', { className: 'ubar', 'aria-hidden': 'true' }, el('i', { style: `width:${Math.round(total / maxTokens * 100)}%` })),
+        el('span', { className: 'unum', textContent: d.requests ? `${d.requests} · ${kfmt(total)}` : '—' }));
+    };
+    const kids = [group('Today', `${u.requests} request${u.requests === 1 ? '' : 's'}, ${kfmt(u.tokens)} tokens so far today.`, u.requests,
+      el('div', { className: 'utable' }, u.rows.map(row)))];
+    if (u.context) kids.push(group('Context', 'How much of my context window this conversation has taken. Past it, older turns fold into a summary.', null,
+      el('div', { className: 'ubar wide', role: 'img', 'aria-label': `${Math.round(u.context.tokens / u.context.budget * 100)}% of the context budget` },
+        el('i', { style: `width:${Math.min(100, Math.round(u.context.tokens / u.context.budget * 100))}%` })),
+      el('p', { className: 'uform', textContent: `${kfmt(u.context.tokens)} of the ${kfmt(u.context.budget)}-token budget (${Math.round(u.context.tokens / u.context.budget * 100)}%).` })));
+    kids.push(group('Last 7 days', 'Requests and tokens per day.', null, el('div', { className: 'utable' }, u.week.map(day))));
+    if (u.quota?.windows?.length) kids.push(group(`${u.quota.displayName} quota`, 'How much of the subscription rate limit has been used.', null,
+      el('div', { className: 'utable' }, u.quota.windows.map((w) => el('div', { className: 'urow' },
+        el('span', { className: 'uname', textContent: w.kind === 'weekly' ? 'This week' : 'Right now' }),
+        el('span', { className: 'ubar', 'aria-hidden': 'true' }, el('i', { style: `width:${Math.round(w.usedPercent)}%` })),
+        el('span', { className: 'unum', textContent: `${Math.round(w.usedPercent)}% used${w.resetsAt ? `, resets ${new Date(w.resetsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}` }))))));
+    return kids;
+  }
+  const PANES = { home, memory, usage: usagePage, model: modelPage, appearance: appearancePage, speaking: speakingPage, listening: listeningPage, shortcuts: shortcutsPage, routines: routinesPage, general: generalPage, about: aboutPage, whatsnew: whatsNewPage };
   // focusKey: what to focus after (a data-k, or an element id); otherwise whatever had focus keeps it.
   function render(focusKey, animate = false) {
     if (!state) return;
