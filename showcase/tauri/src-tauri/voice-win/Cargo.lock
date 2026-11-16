@@ -1322,6 +1322,7 @@ dependencies = [
  "hound",
  "parakeet-rs",
  "png",
+ "rustfft",
  "serde_json",
  "windows-sys",
  "x11rb",

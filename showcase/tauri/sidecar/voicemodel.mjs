@@ -18,6 +18,25 @@ export const MODEL = {
   ],
 };
 
+// Thai (and Thai mixed with English): Typhoon ASR Real-time by SCB 10X (CC-BY-4.0), a 115M FastConformer RNN-T, in
+// the ONNX export huggingface.co/wannaphong/typhoon-asr-realtime-onnx. `from` is the file's name there; `name` is
+// what the voice helper looks for (typhoon.rs).
+export const TYPHOON = {
+  id: 'typhoon-asr-realtime',
+  base: 'https://huggingface.co/wannaphong/typhoon-asr-realtime-onnx/resolve/04af3e7b6d822cb2807bc539301669d4f84691e7/',
+  files: [
+    { name: 'encoder-model.onnx', from: 'encoder-fastconformer-quran-ar.onnx', size: 456050599, sha256: '9573e8224cbad1be622b779e780cccc5638a4dd19097fd6c7258d8ec1c21cf91' },
+    { name: 'decoder_joint-model.onnx', from: 'decoder_joint-fastconformer-quran-ar.onnx', size: 26584368, sha256: 'c445e567e1133506c1ff5e4722ee61b8adf830243e0449de3b796a3205ea1e4a' },
+    { name: 'vocab.json', from: 'tokenizer/vocab.json', size: 36196, sha256: 'a7277aeb7b08f6c8a1ed7838b55d204cf6766dbe583d690bbb9fb0d42de0c2b1' },
+  ],
+};
+
+// The language spoken to it picks the model: each hears one language well, and neither hears the other's.
+export const SPEECH_LANGS = [{ id: 'th', name: 'ไทย (Thai)' }, { id: 'en', name: 'English' }];
+export const MODELS = { th: TYPHOON, en: MODEL };
+export const DEFAULT_SPEECH_LANG = 'th';
+export const speechModel = (lang) => MODELS[lang] ?? MODELS[DEFAULT_SPEECH_LANG];
+
 export const totalBytes = (model = MODEL) => model.files.reduce((n, f) => n + f.size, 0);
 export const sizeLabel = (model = MODEL) => `${Math.round(totalBytes(model) / 1e6)} MB`;
 
@@ -81,7 +100,7 @@ export async function downloadModel(dir, { model = MODEL, onProgress = () => {},
       if (start > f.size) { await fs.rm(part, { force: true }); done -= start; start = 0; }
       try {
         if (start < f.size) {
-          const res = await fetchImpl(model.base + f.name, { headers: start ? { Range: `bytes=${start}-` } : {}, signal, redirect: 'follow' });
+          const res = await fetchImpl(model.base + (f.from ?? f.name), { headers: start ? { Range: `bytes=${start}-` } : {}, signal, redirect: 'follow' });
           // 206: resuming. 200: the server sent it all, so start over. 416: what's there is already complete or wrong.
           if (res.status === 416) { await fs.rm(part, { force: true }); done -= start; onProgress({ done, total }); throw fail('network', 'Range not satisfiable'); }
           if (!res.ok || !res.body) throw fail('network', `HTTP ${res.status}`);

@@ -1617,7 +1617,12 @@ fn handle_sidecar(app: &AppHandle, msg: Value) {
         Some("voice_mic") => to_voice(app, &json!({ "cmd": "mic", "id": msg.get("id").and_then(Value::as_str).unwrap_or("") })),
         Some("voice_config") => {
             if let Some(dir) = msg.get("model").and_then(Value::as_str) {
-                *app.state::<VoiceModel>().0.lock().unwrap() = Some(dir.to_owned());
+                // Another model (the user changed the language they speak): the helper loads its model once, at
+                // start, so the running one is stopped and the next start picks the new folder up.
+                let changed = app.state::<VoiceModel>().0.lock().unwrap().replace(dir.to_owned()).is_some_and(|old| old != dir);
+                if changed {
+                    stop_voice(app);
+                }
             }
             if msg.get("enabled").and_then(Value::as_bool) == Some(true) {
                 app.state::<Voice>().1.store(0, Ordering::Relaxed);
