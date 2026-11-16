@@ -152,6 +152,15 @@ console.log('store tests: all passed');
   assert.ok(S3.listFacts().some((f) => f.id === a.id));
   assert.ok(await S3.forgetFact(a.id));
   assert.equal(S3.listFacts().some((f) => f.id === a.id), false, 'forgotten');
+  // Facts in Thai (or any script that isn't a-z) are told apart by their own letters, not dropped as duplicates.
+  const t1 = await S3.addFact('ผมชอบกาแฟดำ'), t2 = await S3.addFact('ผมทำงานที่กรุงเทพ');
+  assert.notEqual(t1.id, t2.id, 'two Thai facts are two facts');
+  const t3 = await S3.addFact('Nok ชอบกาแฟดำ'), t4 = await S3.addFact('Nok ทำงานที่กรุงเทพ');
+  assert.notEqual(t3.id, t4.id, 'a shared English name does not make Thai facts the same');
+  assert.equal((await S3.addFact('ผมชอบกาแฟดำ!')).id, t1.id, 'the same Thai fact again is still merged');
+  assert.equal((await S3.addFact('ผมชอบน้ำเย็น')).text, 'ผมชอบน้ำเย็น', 'vowel and tone marks are kept in what is compared');
+  const e1 = await S3.addFact('🙂🙂'), e2 = await S3.addFact('🎉');
+  assert.notEqual(e1.id, e2.id, 'facts with no letters at all are compared as written');
   const soon = await S3.addCommitment('ping', Date.now() + 5_000);
   assert.ok(Math.abs(S3.nextDue() - soon.due) < 5, 'nextDue points at the soonest open reminder');
   console.log('facts + timer tests: passed');

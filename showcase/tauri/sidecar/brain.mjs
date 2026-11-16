@@ -117,6 +117,12 @@ const redact = (t) => redactText(String(t), { secrets: (secrets ??= environmentS
 const SECRETISH = /\b(?:\d[ -]?){12,19}\b|\b(?:password|passcode|passphrase|pin code|api key|secret key|access token|2fa code|one-time code)\b/i;
 
 /** The model's JSON → { summary, facts: [{ text, replaces? }] }. Throws if there's no usable JSON. */
+/** A fact made safe to keep: redacted, one line, 3 to 240 characters; null when it holds a secret or isn't one. */
+export function cleanFact(text) {
+  const t = redact(typeof text === 'string' ? text : '').replace(/\s+/g, ' ').trim();
+  return t.length < 3 || t.length > 240 || t.includes(REDACTION_MARKER) || SECRETISH.test(t) ? null : t;
+}
+
 export function parseBrain(text, { knownIds = [], wantSummary = false } = {}) {
   const raw = String(text ?? '').replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, '');
   const a = raw.indexOf('{'), b = raw.lastIndexOf('}');
@@ -124,8 +130,8 @@ export function parseBrain(text, { knownIds = [], wantSummary = false } = {}) {
   const j = JSON.parse(raw.slice(a, b + 1));
   const known = new Set(knownIds);
   const facts = (Array.isArray(j.facts) ? j.facts : []).flatMap((f) => {
-    const t = redact(typeof f === 'string' ? f : f?.text ?? '').replace(/\s+/g, ' ').trim();
-    if (t.length < 3 || t.length > 240 || t.includes(REDACTION_MARKER) || SECRETISH.test(t)) return [];
+    const t = cleanFact(typeof f === 'string' ? f : f?.text ?? '');
+    if (!t) return [];
     const replaces = typeof f?.replaces === 'string' && known.has(f.replaces) ? f.replaces : undefined;
     return [replaces ? { text: t, replaces } : { text: t }];
   }).slice(0, 20);

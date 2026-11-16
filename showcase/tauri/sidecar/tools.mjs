@@ -12,7 +12,8 @@ import { ASK, BLOCK, checkDrawAction, checkFetch, checkOpen, checkRead, checkWri
 import { CARDS, DrawArgs, LIMITS, checkDraw, createParts, createPhotos, describeParts, faviconFor, pickTextMatch, quizNote, resolveTargets } from './draw.mjs';
 import { plain } from './intro.mjs';
 import { linuxSession, seesPointer } from './platform.mjs';
-import { addCommitment, forgetFact, getCommitment, parseDue, parseRepeat, repeatLabel, updateCommitment } from './store.mjs';
+import { cleanFact } from './brain.mjs';
+import { addCommitment, addFact, forgetFact, getCommitment, parseDue, parseRepeat, repeatLabel, updateCommitment } from './store.mjs';
 import { snoozeTarget, snoozeUntil } from './snooze.mjs';
 
 const HOME = os.homedir();
@@ -983,6 +984,19 @@ A drawing stays until the user clears it or the window changes; your next drawin
         onCommitments(c);
         if (c.advanced) return `Ticked off this time. ${c.id} repeats ${repeatLabel(c.repeat)}; next due ${fmtWhen(c.due)}.`;
         return `${c.id} is now ${c.status}${c.due ? `, due ${fmtWhen(c.due)}` : ''}${c.repeat ? `, repeating ${repeatLabel(c.repeat)}` : ''}.`;
+      },
+    },
+    {
+      // Saved the moment it's asked for: waiting for the conversation to be folded could take days.
+      name: 'remember_fact',
+      description: 'Save a lasting fact about the user right away when they ask you to remember something ("remember that…", "จำไว้ว่า…", "don\'t forget I…"): one short sentence in their language, naming them. replaces: the id of a saved fact this corrects (ids are in the memory section of the <live-state> block). Not for reminders or anything with a time (remember_commitment). Never passwords, codes, keys or card and account numbers.',
+      parameters: z.object({ text: z.string().min(3).max(240), replaces: z.string().max(12).optional() }),
+      execute: async ({ text, replaces }) => {
+        const t = cleanFact(text);
+        if (!t) throw new Error('Not saved: it looks like a secret (a password, code, key or card number), and those are never kept. Tell the user so.');
+        if (replaces) await forgetFact(replaces);
+        const f = await addFact(t);
+        return `Saved as ${f.id}: ${f.text}`;
       },
     },
     {

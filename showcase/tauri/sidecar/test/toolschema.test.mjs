@@ -20,6 +20,9 @@ const walk = (name, node, at) => {
 };
 for (const t of tools) walk(t.name, resolveToolSchema(t), '');
 assert.deepEqual(formats, [], 'no tool uses a string format');
+// Remembering on request is its own tool, next to forgetting.
+assert.ok(tools.some((t) => t.name === 'remember_fact') && tools.some((t) => t.name === 'forget_fact'), 'remember_fact and forget_fact');
+assert.deepEqual(resolveToolSchema(tools.find((t) => t.name === 'remember_fact')).required, ['text']);
 // draw replaced point_at, on every platform (pixels from a screenshot work everywhere).
 assert.ok(tools.some((t) => t.name === 'draw') && !tools.some((t) => t.name === 'point_at'), 'draw, not point_at');
 const drawSchema = JSON.stringify(resolveToolSchema(tools.find((t) => t.name === 'draw')));
