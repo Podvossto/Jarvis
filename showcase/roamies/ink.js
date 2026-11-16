@@ -2298,6 +2298,14 @@
     // Another window came to the front, or that window moved or closed: the drawing no longer sits on what it was
     // about, so all of it fades (cards too).
     stale() { stop(); fadeOut(marks.filter((m) => m.alive && !m.local && !m.pinned), 0.6); },
+    // The sidecar closes these parts (the user said "close that"): a quick fade, no pen. A pinned card goes too,
+    // since it was asked for by name.
+    close(ids) {
+      const gone = (Array.isArray(ids) ? ids : []).flatMap((id) => partMarks(String(id)));
+      if (!gone.length) return;
+      sfx('tick');
+      fadeOut(gone, 0.3);
+    },
     click(x, y) { G.wait?.click(x, y); },
     ptr(x, y) { G.ptr = [x, y]; G.wait?.ptr(x, y); },
     // The reminders list from the sidecar: { today, later, seconds, flash, toggle }. seconds > 0 opens or extends it;
