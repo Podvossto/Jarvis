@@ -25,14 +25,29 @@
     create(env) {
       const { clamp, rand } = Roamie;
       const S = (n) => Roamie.sfx?.play(n);
-      const PAL = o.pal, L = PAL.length - 1;
+      const MINT = o.pal, L = MINT.length - 1;
+      // The body follows its state (host.js sets Roamie.busy while a request runs; poses carry the rest): lime
+      // while it works, amber while it listens for the user's answer, the mint look at rest — ink.js's TONES.
+      // Each ramp keeps the mint one's brightness steps: darker levels scale the tone down, the hottest mixes
+      // it toward white, so the shading and the ordered dither read exactly as before.
+      const lum = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2], rgbOf = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+      const toneRamp = (hex) => {
+        const t = rgbOf(hex), hot = Math.max(1, lum(MINT[4]) - lum(MINT[3]));
+        return MINT.map((c) => {
+          const u = Math.min(0.8, Math.max(0, (lum(c) - lum(MINT[3])) / hot));
+          return u > 0 ? t.map((v, i) => Math.round(v + (255 - v) * u)) : t.map((v) => Math.round(v * (lum(c) / lum(MINT[3]))));
+        });
+      };
+      const RAMPS = { idle: MINT, work: toneRamp('#b6f36b'), listen: toneRamp('#ffcf5c') };
+      let PAL = MINT;
+      const setTone = (name) => { if (RAMPS[name] !== PAL) { PAL = RAMPS[name]; GAP = PAL[0].map((c) => (c * 0.7) | 0); } };
       const { n: PN, t: PT } = PATTERNS[o.pattern ?? 'bayer4'], PM = PN - 1;
       // The dither pattern is pinned to the screen, or to the body while it follows the cursor (tox, toy: its cell),
       // so the shading doesn't crawl across it as it moves.
       let tox = 0, toy = 0;
       const th = (gx, gy) => PT[((gy - toy) & PM) * PN + ((gx - tox) & PM)];
       const K = o.matrix ? 4 : 1;
-      const GAP = PAL[0].map((c) => (c * 0.7) | 0);
+      let GAP = PAL[0].map((c) => (c * 0.7) | 0);
       const SCAN = o.scan ?? 1;
       const m = new Roamie.Mover(env, { speed: o.speed ?? 95, accel: 2.4 });
       const face = new Roamie.Face();
@@ -673,6 +688,10 @@
             ox = pose.ox ?? 0; oy = pose.oy ?? 0;
           }
           arms = Roamie.damp(arms, act ? 1 : pose?.arms ?? 0, act || pose?.arms ? 10 : 6, dt);
+          // The body's colour follows the state: lime while a request runs (Roamie.busy, or the think/talk
+          // poses, a tool's 'work' pose), amber while the mic is open for the user's answer; working wins.
+          setTone(!!Roamie.busy || pose?.mode === 'think' || pose?.mode === 'talk' || pose?.mode === 'work' ? 'work'
+            : pose?.mode === 'listen' ? 'listen' : 'idle');
           // The gesture offsets (ox, oy: a hop, a shake) move the body, and the hands with it.
           for (const h of hands) { const tg = h.s < 0 ? tl : tr; spring(h.o, tg[0] * R, tg[1] * R, 150, 13, dt); h.x = m.x + ox + h.o.x; h.y = m.y + oy + h.o.y; }
           for (let i = parts.length - 1; i >= 0; i--) {
