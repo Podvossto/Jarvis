@@ -966,6 +966,31 @@
       for (const p of plots) await trace(p.pts.map(([px, py]) => [px + x, py + y]), 1.2, (e) => (p.p = e));
       for (const d of dots) await trace(d.pts.map(([px, py]) => [px + x, py + y]), 0.3, (e) => (d.p = e));
     },
+    // A real chart: the sidecar rendered its SVG (chart.mjs, offline); here it's only a picture on a card.
+    async chart(m) {
+      const CW = 520, CH = 320, PAD = 10;
+      const img = m.svg ? await new Promise((res) => {
+        const i = new Image(), t = setTimeout(() => res(null), 4000);
+        i.onload = () => { clearTimeout(t); res(i.naturalWidth && i.naturalHeight ? i : null); };
+        i.onerror = () => { clearTimeout(t); res(null); };
+        i.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(m.svg);
+      }) : null;
+      // The glow is the same picture blurred, made once offscreen: blurring it live every frame would cost.
+      let glow = null;
+      if (img) { glow = document.createElement('canvas'); glow.width = CW; glow.height = CH; const g = glow.getContext('2d'); g.filter = 'blur(3px)'; g.drawImage(img, 0, 0, CW, CH); }
+      const w = CW + PAD * 2, h = 26 + CH + PAD * 2;
+      const c = await card(m, w, h, function (b, l, t, x, y, age) {
+        const u = clamp(age / 0.5, 0, 1);
+        if (img) {
+          if (u < 1) { b.save(); b.globalAlpha = u; }
+          b.drawImage(img, x + PAD, y + PAD, CW, CH);
+          if (u < 1) b.restore();
+          l.save(); l.globalCompositeOperation = 'lighter'; l.globalAlpha = 0.4 * u; l.drawImage(glow, x + PAD, y + PAD, CW, CH); l.restore();
+        } else { b.fillStyle = 'rgba(14,92,96,0.25)'; b.fillRect(x + PAD, y + PAD, CW, CH); typed(b, 'no chart drawn', x + w / 2, y + PAD + CH / 2, SMALL, DIM, 1, { anchor: 'middle' }); }
+      }, { title: m.chart?.title || 'chart' });
+      sfx('scan');
+      return c;
+    },
     async legend(m) {
       // Keys flow onto more lines rather than past the edge.
       const maxW = 420, at0 = []; let cx = 18, row = 0, widest = 0;
