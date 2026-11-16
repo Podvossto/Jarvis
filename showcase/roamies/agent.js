@@ -1092,7 +1092,8 @@
       pose: (dt) => {
         lookAt = null;
         if (now < actUntil && !tool) { lastPose = null; return null; }
-        const tp0 = tool ? tool.def.pose(tool, C) : null, tp = tp0 && { ...tp0, arms: 0, tl: undefined, tr: undefined };
+        // A tool's performance carries mode 'work' (10-dither.js tints the body lime while it works).
+        const tp0 = tool ? tool.def.pose(tool, C) : null, tp = tp0 && { ...tp0, mode: 'work', arms: 0, tl: undefined, tr: undefined };
         const bp = bubblePose(dt);
         let p = tp ?? bp;
         if (tp && bp && b?.kind === 'speech' && mouthT > 0) p = { ...tp, mouth: bp.mouth };

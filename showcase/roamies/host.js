@@ -257,6 +257,7 @@
         // Nor is it still working in another app, even if that work's end was missed.
         a.hand?.end();
         responding = true;
+        Roamie.busy = true; // the body's LED colour reads this (10-dither.js): lime while a request runs
         heard = null;
         research = false; fromWeb = false; spoken = '';
         agentish = !!e.agentish;
@@ -350,6 +351,7 @@
         break;
       case 'done':
         responding = false;
+        Roamie.busy = false;
         if (agentish) { agentish = false; Roamie.agentHome?.hatchOff(); }
         if (research) panel()?.end(fromWeb ? 'From the web' : 'Answer');
         research = waveTurn = false;
@@ -360,6 +362,7 @@
       case 'error':
         dropAutoListen();
         responding = false;
+        Roamie.busy = false;
         if (agentish) { agentish = false; Roamie.agentHome?.hatchOff(); }
         if (research) panel()?.fail(e.message);
         research = waveTurn = false;
