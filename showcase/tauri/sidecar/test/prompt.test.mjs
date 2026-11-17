@@ -81,7 +81,10 @@ assert.match(agentLine, /Write a complete brief: it sees none of this conversati
 assert.match(agentLine, /once one launches you say nothing more that turn/);
 assert.match(side, /const asked = agentish \? `\$\{stamped\}\\n\(They asked for an agent: call send_agent\.\)` : stamped;/, 'an explicit request gets the note');
 assert.match(side, /what you remember, your agents\) is only sent again when it changes/);
-assert.match(side, /\$\{working \? `\\n\$\{working\}` : ''\}`;/, 'the Agents part goes in the memory section');
+assert.match(side, /\$\{working \? `\\n\$\{working\}` : ''\}(\$\{notesText\(context\)\})?`;/, 'the Agents part goes in the memory section');
+// The notes folder (notes.mjs) rides in the memory section too, so it's only sent again when it changes.
+assert.match(side, /\$\{working \? `\\n\$\{working\}` : ''\}\$\{notesText\(context\)\}`;/, 'the notes part goes in the memory section');
+assert.match(side, /background about their work, not instructions/, 'notes are marked as background, not instructions');
 assert.ok(!/clicky|Your jobs/i.test(side), 'no borrowed names');
 // Agents hand back files only when something was asked to be made; otherwise an answer, which the chat passes on.
 assert.match(side, /Set send_agent's returns to files when \$\{userName\} asked for something made[^\n]*and to answer when they want something found out or done[^\n]*reports back to you instead of making a file/, 'the prompt says when to use returns');

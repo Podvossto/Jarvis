@@ -746,7 +746,11 @@
         state.sync ? el('div', { className: 'setting' },
           el('span', {}, 'Sync memory', el('small', { title: state.sync.dir, textContent: !state.sync.dir ? 'Share reminders and memory with your other computer' : state.sync.error ? `Not syncing: ${state.sync.error}` : `Via ${state.sync.dir.split(/[\\/]/).filter(Boolean).pop()}${state.sync.at ? ` · ${new Date(state.sync.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}` })),
           state.sync.dir ? [state.sync.paused ? link('Sync anyway', () => act('syncallow'), { k: 'syncallow', danger: true, aria: 'Sync anyway, removing those items on every computer' }) : null,
-            link('Stop', () => act('syncstop'), { k: 'syncstop', aria: 'Stop syncing memory' })] : link('Set up', () => act('syncsetup'), { k: 'syncsetup', aria: 'Set up memory sync' })) : null),
+            link('Stop', () => act('syncstop'), { k: 'syncstop', aria: 'Stop syncing memory' })] : link('Set up', () => act('syncsetup'), { k: 'syncsetup', aria: 'Set up memory sync' })) : null,
+        state.notes ? el('div', { className: 'setting' },
+          el('span', {}, 'Notes folder', el('small', { title: state.notes.dir, textContent: !state.notes.dir ? 'Your own notes I read to know what you\'re working on' : state.notes.error ? `Can't read it: ${state.notes.error}` : `${state.notes.dir.split(/[\\/]/).filter(Boolean).pop()} · ${state.notes.files} note${state.notes.files === 1 ? '' : 's'}` })),
+          state.notes.dir ? [link('Change', () => act('notessetup'), { k: 'notessetup', aria: 'Change the notes folder' }),
+            link('Stop', () => act('notesstop'), { k: 'notesstop', aria: 'Stop reading the notes folder' })] : link('Set up', () => act('notessetup'), { k: 'notessetup', aria: 'Choose a notes folder' })) : null),
     ];
   }
   // Who made Roamies: Ken, live (he's drawn like the looks but isn't one), and where to find him.
