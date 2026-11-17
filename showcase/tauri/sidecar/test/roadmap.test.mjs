@@ -44,7 +44,8 @@ assert.deepEqual(problems({ shade: [{ name: 'เชียงใหม่' }] }),
 assert.deepEqual(problems({ place: 'Chiang Mai', zoom: 'street', pins: [{ name: 'A', place: 'Tha Phae Gate' }, { name: 'B', lat: 18.79, lon: 98.98 }], routes: [{ from: 'A', to: 'B' }] }), []);
 assert.match(problems({ place: 'Bangkok', zoom: 40 })[0], /zoom is country, province, city, district, street or a number from 1 to 18/);
 assert.match(problems({ zoom: 'city' })[0], /needs place/);
-assert.match(problems({ place: 'x', pins: [{ name: 'A' }] })[0], /pin "A": needs place .* or lat and lon/);
+// Regression: a pin with only a name was refused, and the model spent a whole round trip adding place to each.
+assert.deepEqual(problems({ place: 'x', pins: [{ name: 'A' }] }), [], 'a pin with only a name is looked up by it');
 assert.match(problems({ place: 'Bangkok', shade: [{ name: 'Chiang Mia' }] })[0], /no Thai province "Chiang Mia" \(nearest: Chiang Mai \(เชียงใหม่\)/, 'a misspelt province gets the nearest names');
 assert.match(problems({ place: 'Bangkok', pins: [{ name: 'A', lat: 1, lon: 2 }], routes: [{ from: 'A', to: 'C' }] })[0], /route 1: no pin is named "C"/);
 const many = Array.from({ length: LIMITS.lookups + 1 }, (_, i) => ({ name: `p${i}`, place: `Place ${i}` }));

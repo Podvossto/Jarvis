@@ -65,10 +65,13 @@ export const isRoadMap = (m) => m.place != null || m.zoom != null || (m.pins ?? 
 /** The province a map's place names, when the map shows it whole (no zoom, or province level or wider). Zoomed in
  *  further, the name is looked up instead: a province's middle is rarely its town ("Bangkok" at city zoom landed in
  *  Lat Krabang). */
+// A pin with only a name is looked up by that name, in the map's place when that is a name too: models write
+// {name: 'ประตูท่าแพ'} on a map of Chiang Mai, and refusing it cost a whole round trip.
+const pinPlace = (p, m) => p.place ?? (p.name ? `${p.name}${m.place != null && !parseLatLon(m.place) ? `, ${m.place}` : ''}` : null);
 const wholeProvince = (m) => (m.zoom == null || zoomLevel(m.zoom) <= SCOPES.province ? findProvince(m.place) : null);
 /** The names that need looking up (not lat, lon or a province shown whole): the map's centre, then its pins'. */
 export function lookups(m) {
-  const names = [m.place != null && !wholeProvince(m) ? m.place : null, ...(m.pins ?? []).filter((p) => !hasLatLon(p)).map((p) => p.place)].filter((s) => s != null && !parseLatLon(s));
+  const names = [m.place != null && !wholeProvince(m) ? m.place : null, ...(m.pins ?? []).filter((p) => !hasLatLon(p)).map((p) => pinPlace(p, m))].filter((s) => s != null && !parseLatLon(s));
   return [...new Set(names.map((s) => String(s).trim()))];
 }
 /** Problems with a road map, as lines for the model ([] when fine). */
@@ -77,7 +80,7 @@ export function checkRoadMap(m) {
   if (m.zoom != null && !(zoomLevel(m.zoom) >= 1 && zoomLevel(m.zoom) <= 18)) out.push(`zoom is ${Object.keys(SCOPES).join(', ')} or a number from 1 to 18.`);
   if (m.place == null && !pins.length && !(m.shade ?? []).length) out.push('needs place (a place name or "lat,lon") to centre on, pins or shade.');
   for (const p of pins) {
-    if (p.place == null && !hasLatLon(p)) out.push(`pin "${p.name}": needs place (a place name or "lat,lon") or lat and lon.`);
+    if (pinPlace(p, m) == null && !hasLatLon(p)) out.push(`pin "${p.name}": needs place (a place name or "lat,lon") or lat and lon.`);
     else if (hasLatLon(p) && !(Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180)) out.push(`pin "${p.name}": lat must be between -90 and 90 and lon between -180 and 180.`);
   }
   for (const s of m.shade ?? []) if (!findProvince(s.name)) {
@@ -223,7 +226,7 @@ export async function roadMapPayload(m, { geocoder, styles }) {
     const [st, centre, pins] = await Promise.all([
       styles.get(),
       m.place != null ? where(m.place, wholeProvince(m)) : null,
-      Promise.all((m.pins ?? []).map(async (p) => ({ ...(hasLatLon(p) ? { lat: p.lat, lon: p.lon } : await where(p.place)), name: p.name }))),
+      Promise.all((m.pins ?? []).map(async (p) => ({ ...(hasLatLon(p) ? { lat: p.lat, lon: p.lon } : await where(pinPlace(p, m))), name: p.name }))),
     ]);
     style = st;
     const areas = (m.shade ?? []).map((s) => { const p = findProvince(s.name); return { name: `${p.th} ${p.en}`, tone: s.tone ?? 'amber', box: p.b, rings: provinceRings(p) }; });
