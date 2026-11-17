@@ -204,6 +204,9 @@ console.log('safety tests: passed');
   for (const l of ['Einstellungen', 'Paramètres', 'Configuración', 'Tetapan', 'Profil', 'Weiter', 'Suivant', '设置', '設定', '설정',
     'Pagination', 'Sender name', 'Payment history', 'Buyer guide', 'Kopenhagen', 'Esciolto', 'Bayaran balik policy page'])
     assert.ok(!isRiskyClick(l), `"${l}" is a normal click`);
+  // Thai: plain substring match, no word edges.
+  for (const l of ['ลบ', 'ลบทิ้ง', 'นำออก', 'เอาออก', 'ล้างข้อมูล', 'รีเซ็ต', 'คืนค่า', 'ชำระเงิน', 'จ่ายเงิน', 'ซื้อ', 'สั่งซื้อ', 'ยืนยันคำสั่งซื้อ', 'ยืนยันการชำระเงิน', 'ส่ง', 'ส่งต่อ', 'โอนเงิน', 'โอน', 'ถอนเงิน', 'ออกจากระบบ', 'ลงชื่อออก', 'ยกเลิกการสมัคร', 'ยกเลิกสมาชิก', 'ยกเลิกคำสั่งซื้อ', 'ปิดบัญชี', 'ลบบัญชี', 'ถอนการติดตั้ง', 'เผยแพร่', 'โพสต์', 'ละทิ้ง', 'ฟอร์แมต', 'เพิกถอน', 'ลบ 3 รายการ', 'ปุ่มชำระเงินทันที']) assert.ok(isRiskyClick(l), `${l} is risky`);
+  for (const l of ['บันทึก', 'ยกเลิก', 'ตั้งค่า', 'ค้นหา', 'ส่งออก', 'จัดส่ง', 'ลงชื่อเข้าใช้', 'ตกลง']) assert.ok(!isRiskyClick(l), `${l} is fine`);
   console.log('multilingual risky click tests: passed');
 }
 // Redirects joined with & (2>&1, &>file) are part of the command, not a background job.
@@ -385,6 +388,10 @@ console.log('safety loophole tests: passed');
   assert.equal(riskyKind('Log out'), 'log out');
   assert.equal(riskyKind('删除账户'), '删除');
   assert.equal(riskyKind('Settings'), null);
+  assert.equal(riskyKind('ลบโพสต์'), 'ลบ');
+  assert.equal(riskyKind('ชำระเงิน'), 'ชำระเงิน');
+  assert.equal(riskyKind('ส่งออก'), null);
+  assert.notEqual(riskyKind('ลบ'), riskyKind('ส่ง'));
   assert.equal(riskyKind('DELETE'), riskyKind('Delete post'), 'two labels of one kind share a key');
   assert.notEqual(riskyKind('Delete'), riskyKind('Send'));
   console.log('risky kind tests: passed');
