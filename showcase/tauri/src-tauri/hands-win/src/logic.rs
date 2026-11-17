@@ -313,9 +313,16 @@ const RISKY_CJK: &[&str] = &[
     "删除", "刪除", "移除", "清空", "支付", "付款", "购买", "購買", "发送", "發送", "退出登录", "登出", "注销", "削除", "消去", "支払", "購入", "送信", "ログアウト", "退会",
     "삭제", "결제", "구매", "전송", "보내기", "로그아웃",
 ];
+// Thai: plain substrings too. "ส่ง" (send) is checked apart, since it also sits in "ส่งออก" (export) and "จัดส่ง" (shipping).
+const RISKY_THAI: &[&str] = &[
+    "ลบ", "ลบทิ้ง", "นำออก", "เอาออก", "ล้างข้อมูล", "รีเซ็ต", "คืนค่า", "ชำระเงิน", "จ่ายเงิน", "ซื้อ", "สั่งซื้อ", "ยืนยันคำสั่งซื้อ", "ยืนยันการชำระเงิน", "โอนเงิน", "โอน", "ถอนเงิน", "ออกจากระบบ", "ลงชื่อออก", "ยกเลิกการสมัคร", "ยกเลิกสมาชิก", "ยกเลิกคำสั่งซื้อ", "ปิดบัญชี", "ลบบัญชี", "ถอนการติดตั้ง", "เผยแพร่", "โพสต์", "ละทิ้ง", "ฟอร์แมต", "เพิกถอน",
+];
 
 pub fn risky(s: &str) -> bool {
     if RISKY_CJK.iter().any(|w| s.contains(w)) {
+        return true;
+    }
+    if RISKY_THAI.iter().any(|w| s.contains(w)) || s.replace("ส่งออก", "").replace("จัดส่ง", "").contains("ส่ง") {
         return true;
     }
     let l: Vec<char> = s.to_lowercase().chars().collect();
@@ -784,6 +791,8 @@ pub fn self_test() -> Vec<(&'static str, bool)> {
         ("each wait after a click counts", react_waits(&["click_at", "wait", "click_at", "wait", "take_screenshot"]) == vec![1, 3]),
         ("risky labels need a yes", risky("Delete account") && risky("Place your order") && risky("Cancel my subscription") && risky("Löschen") && risky("削除する")),
         ("everyday labels don't", !risky("Save") && !risky("Undelete") && !risky("Sender name") && !risky("Cancel") && !risky("Payment details")),
+        ("thai risky labels need a yes", ["ลบ", "ชำระเงิน", "ยืนยันคำสั่งซื้อ", "ส่ง", "ส่งต่อ", "โอนเงิน", "ออกจากระบบ", "ยกเลิกการสมัคร", "ปิดบัญชี", "ถอนการติดตั้ง", "โพสต์", "เพิกถอน", "ลบ 3 รายการ"].iter().all(|l| risky(l))),
+        ("thai everyday labels don't", ["บันทึก", "ยกเลิก", "ตั้งค่า", "ค้นหา", "ส่งออก", "จัดส่ง", "ลงชื่อเข้าใช้"].iter().all(|l| !risky(l))),
         ("cmd is Ctrl on Windows", parse_combo("cmd+a") == Some((MOD_CTRL, 0x41)) && parse_combo("Cmd + S") == Some((MOD_CTRL, 0x53))),
         ("named and symbol keys", parse_combo("return") == Some((0, 0x0D)) && parse_combo("shift+tab") == Some((MOD_SHIFT, 0x09)) && parse_combo("*") == Some((MOD_SHIFT, 0x38)) && parse_combo("+") == Some((MOD_SHIFT, 0xBB))),
         ("cmd++ zooms in, ctrl+end goes to the end", parse_combo("cmd++") == Some((MOD_CTRL | MOD_SHIFT, 0xBB)) && parse_combo("ctrl+end") == Some((MOD_CTRL, 0x23))),
