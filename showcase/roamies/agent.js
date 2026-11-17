@@ -228,6 +228,18 @@
       return [(S.l + S.r) / 2, (S.t + S.b) / 2];
     };
     const setStation = (x, y, byCursor = null) => { station.x = x; station.y = y; station.byCursor = byCursor; m.anchor = { x, y, r: k.R * 0.35 }; };
+    // Pinned: it stays on one spot of the screen instead of popping up beside the cursor and following it, and no
+    // longer hops out of the cursor's way. fx, fy: where, from the left/top (0) to the right/bottom (1) of the room it
+    // has, so a spot survives a change of screen size. Dropping it after a drag pins it there.
+    let pinned = null;
+    const pinXY = () => {
+      const S = bounds(), r = k.R;
+      return [lerp(S.l + r * 2.4, S.r - r * 2.4, pinned.fx), lerp(S.t + r * 2.4, S.b - r * 1.9, pinned.fy)];
+    };
+    const pinFrom = (x, y) => {
+      const S = bounds(), r = k.R, f = (v, a, b) => (b > a ? clamp((v - a) / (b - a), 0, 1) : 0.5);
+      return { fx: f(x, S.l + r * 2.4, S.r - r * 2.4), fy: f(y, S.t + r * 2.4, S.b - r * 1.9) };
+    };
     // Pop up right beside the cursor, like a buddy at your elbow: to its right and a little below the tip
     // (the arrow's body points down-right), else its left, else above or below. Bubbles then open on the
     // side away from the cursor, so whatever it's pointing at stays visible.
@@ -375,7 +387,7 @@
 
     // A new request (talking, typing, summoning): come over to the cursor if it's somewhere else now.
     const comeToCursor = () => {
-      if (R.sidebar?.on) return; // game mode: it stays in its panel
+      if (R.sidebar?.on || pinned) return; // game mode: it stays in its panel; pinned: on its spot
       const p = presence.ptr;
       if (!p || !visible() || pen.held || m.dragging || m.flung) return;
       if (station.byCursor && Math.hypot(p[0] - station.byCursor[0], p[1] - station.byCursor[1]) < k.R * 2.5) return;
@@ -395,6 +407,7 @@
       // Game mode (sidebar.js): at the top of the panel at the screen's edge, never beside a cursor that isn't there.
       const dock = R.sidebar?.dock?.();
       if (dock) { setStation(dock[0], dock[1]); station.atDock = true; return dock; }
+      if (pinned) { const p = pinXY(); setStation(p[0], p[1]); return p; }
       const near = besideCursor();
       if (near) { setStation(near[0], near[1], presence.ptr.slice()); station.quietUntil = now + 4; return near; }
       const [cx, cy] = presence.cursor ?? [null, null];
@@ -857,7 +870,7 @@
     const hitBubble = (bb, x, y) => bb && !bb.closing && x >= bb.x.x && x <= bb.x.x + bb.w.x && y >= bb.y.x && y <= bb.y.x + bb.h.x;
 
     // Back beside the cursor wherever it is now (they may have moved on meanwhile), else where it was when taken.
-    const penHome = () => R.sidebar?.dock?.() ?? (presence.ptr && besideCursor(fol.side < 0 ? 'left' : 'right', presence.ptr)) ?? pen.home ?? [m.x, m.y];
+    const penHome = () => R.sidebar?.dock?.() ?? (pinned && pinXY()) ?? (presence.ptr && besideCursor(fol.side < 0 ? 'left' : 'right', presence.ptr)) ?? pen.home ?? [m.x, m.y];
     // Working in another app (act_in_app): it turns into its cursor and blinks from spot to spot as the helper reports
     // them, then back beside the user's cursor. Held like a drawing's pen, so it no longer chases the real cursor when
     // a step borrows it. Clicks don't wait for it: when spots come faster than it hops, it skips to the newest one.
@@ -995,6 +1008,17 @@
         station.moving = false; station.flee = 0; station.quietUntil = now + 1;
       },
       setAuto: (on, idle) => { presence.auto = !!on; if (idle) presence.idle = idle; presence.lastActive = now; },
+      // Pin to a spot ({fx, fy}, 0 to 1 across the screen) and go there, or null: back to following the cursor.
+      pin: (p) => {
+        pinned = p && Number.isFinite(p.fx) && Number.isFinite(p.fy) ? { fx: clamp(p.fx, 0, 1), fy: clamp(p.fy, 0, 1) } : null;
+        if (pinned) {
+          fol.on = false; if (m.drive === drive) m.drive = null;
+          const [x, y] = pinXY();
+          setStation(x, y);
+          if (visible() && !pen.held && !m.dragging) { m.goTo(x, y); station.moving = true; station.rush = true; }
+        } else if (visible()) comeToCursor();
+      },
+      get pinned() { return pinned ? { ...pinned } : null; },
       get visible() { return visible(); },
       // The speech bubble is still typing its words out.
       typing: () => !!b && b.kind === 'speech' && b.shown < b.text.length,
@@ -1218,21 +1242,24 @@
           // A plain click (press without moving it) isn't a move.
           if (station.held && !held && station.from && Math.hypot(m.x - station.from[0], m.y - station.from[1]) > k.R * 0.5) {
             setStation(m.x, m.y); station.quietUntil = now + 2.5; station.moving = false;
+            // Dragged and dropped: it stays there from now on (until told to follow the cursor again).
+            pinned = pinFrom(m.x, m.y);
+            R.onPin?.(pinned);
           }
           station.held = held;
           // A fullscreen game pinned the cursor (host.js): leave the spot beside it or under it, clear of where it's pinned.
-          const pinned = R.game && presence.cursor;
-          if (pinned && !held && !pen.held && !station.moving && (station.byCursor || Math.hypot(m.x - pinned[0], m.y - pinned[1]) < AVOID())) {
+          const gamePin = R.game && presence.cursor;
+          if (gamePin && !held && !pen.held && !station.moving && (station.byCursor || Math.hypot(m.x - gamePin[0], m.y - gamePin[1]) < AVOID())) {
             const [x, y] = pickSpot(presence.cursor?.[0], presence.cursor?.[1], m.x, m.y);
             setStation(x, y); m.goTo(x, y); station.moving = true; station.flee = 0;
           }
           // Popped up beside the cursor: it goes where the cursor goes (until it's dragged somewhere).
           if (pen.held) { fol.on = false; m.drive = held ? null : penDrive; station.flee = 0; }
-          else if (!held && station.byCursor && presence.ptr) { follow(env, dt); station.flee = 0; }
+          else if (!held && station.byCursor && presence.ptr && !pinned) { follow(env, dt); station.flee = 0; }
           else { fol.on = false; m.drive = null; }
           nativeStep(dt, self);
           // While drawing, stay put: the user's cursor is supposed to come over here.
-          if (!held && env.mouse && !pen.held && !station.byCursor) {
+          if (!held && env.mouse && !pen.held && !station.byCursor && !pinned) {
             const cx = env.mouse.x, cy = env.mouse.y, dBody = Math.hypot(cx - m.x, cy - m.y);
             // Pointing right at it or its bubble means "I want this"; hovering around it means "you're in my way".
             const onIt = dBody < m.radius * 1.1 || (b && hitBubble(b, cx, cy));

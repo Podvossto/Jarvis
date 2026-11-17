@@ -1634,6 +1634,9 @@ fn handle_sidecar(app: &AppHandle, msg: Value) {
                 let wake = msg.get("wake").and_then(Value::as_bool).unwrap_or(false);
                 // Windows: the folder the wake word's models were downloaded to goes with it.
                 to_voice(app, &json!({ "cmd": "wake", "on": wake, "dir": msg.get("wakeDir") }));
+                // Always listening, no wake word (the Windows/Linux helper).
+                let open = msg.get("open").and_then(Value::as_bool).unwrap_or(false);
+                to_voice(app, &json!({ "cmd": "open_mic", "on": open }));
                 let name = msg.get("wakeName").and_then(Value::as_str).unwrap_or("");
                 to_voice(app, &json!({ "cmd": "wake_name", "word": name }));
             } else {

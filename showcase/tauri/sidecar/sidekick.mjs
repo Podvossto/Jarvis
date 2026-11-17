@@ -38,7 +38,7 @@ import { KEY_NAME as SYNC_KEY, MIN_PASSPHRASE, checkFolder, folderReady, merge a
 import { EMOTES, EchoFilter, ReplyStream } from './reply.mjs';
 import { createLocalTts, localTtsCommand } from './localtts.mjs';
 import { DEFAULT_SPEECH_LANG, SPEECH_LANGS, WAKE, WAKE_PHRASE, downloadModel, isReady, modelDir, sizeLabel, speechModel, totalBytes } from './voicemodel.mjs';
-import { copyText, createTools, expand, fitImage, imageBlock, winOpen } from './tools.mjs';
+import { copyText, createTools, expand, fitImage, imageBlock, winOpen, PLACES } from './tools.mjs';
 import { describeMarks } from './marks.mjs';
 import { clickIntent, pickControl } from './fastclick.mjs';
 import { faviconFor } from './draw.mjs';
@@ -109,7 +109,7 @@ const DEFAULT_KEYS = process.platform === 'win32'
   : { talk: ['control', 'option'], summon: 'Control+Alt+KeyS', snap: 'Control+Alt+KeyA', list: 'Control+Alt+KeyL' };
 const DEFAULTS = {
   provider: null, model: null, sound: true, allowActions: false, voice: true,
-  onboarded: false, onboardStep: 0, filesAsked: false, keys: DEFAULT_KEYS, muteWhileTalking: true, speechLang: DEFAULT_SPEECH_LANG, autoListen: false, wakeWord: false, setupVersion: 0, size: 'default', look: 'classic', introDone: false,
+  onboarded: false, onboardStep: 0, filesAsked: false, keys: DEFAULT_KEYS, muteWhileTalking: true, speechLang: DEFAULT_SPEECH_LANG, autoListen: false, wakeWord: false, openMic: false, pin: null, setupVersion: 0, size: 'default', look: 'classic', introDone: false,
   replies: 'text', // 'voice': spoken (with Fish Audio or Gemini) as well as shown
   tts: 'fish', // which one speaks: 'fish' (Fish Audio), 'gemini' or 'voicestudio' (the VoiceStudio app on this computer)
   studioVoices: {}, // look → its VoiceStudio voice (a saved profile id; none: the selected engine's default voice)
@@ -159,6 +159,8 @@ const voiceModel = { status: NEEDS_MODEL ? 'missing' : 'ready', done: 0, total: 
 // The wake word on Windows: a fixed phrase ("Hey Jarvis") heard by the voice helper with its own small models,
 // downloaded the first time it's turned on. macOS has its own (any name, through Apple's recogniser).
 const WAKE_OK = process.platform === 'win32';
+// Open mic (always listening, no wake word): the Windows/Linux voice helper only.
+const OPEN_MIC_OK = VOICE_OK && process.platform !== 'darwin';
 const WAKE_DIR = modelDir(WAKE);
 const wakeReady = () => isReady(WAKE_DIR, WAKE);
 function pickSpeechModel() {
@@ -497,6 +499,7 @@ const { tools, hands, whereNow, frontNow: frontData, frontBounds, ink, nextTurn 
   focus: HANDS_OK ? { start: (m, t) => startFocus(m, t), stop: () => stopFocus() } : null,
   firedReminders: () => firedReminders,
   allowActions: () => config.allowActions, ui, ask, openUrl, userName,
+  setMode: (m) => setMode(m),
   speak: (line) => { if (!turnVoice) return false; turnVoice.say(line); return true; },
   onHandoff: (task) => { activity.handoff(task); panel(); },
   commitmentsText: () => [commitmentsText(), doneTodayText() && `Done today:\n${doneTodayText()}`].filter(Boolean).join('\n'),
@@ -677,7 +680,11 @@ const hearingLine = () => {
     ? ` Wake word is ON: ${userName} can say "${WAKE_PHRASE}" to start talking hands-free, with no key (a request that still starts with "${WAKE_PHRASE}" or "Jarvis" is them waking you: ignore that part). They turn it off from the tray icon's menu or the Listening page.`
     : ` You have a wake word, "${WAKE_PHRASE}", and it is OFF now: they turn it on from the tray icon's menu ("Listen for ${WAKE_PHRASE}") or the Listening page in ${PANEL}; you can't switch it yourself.`;
   const voice = tts().local ? ' Your replies are spoken by a voice running on this computer (free, works offline).' : '';
-  return `- Hearing: you understand ${lang} speech now (${others} is the other choice, on the Listening page; one at a time).${wake}${voice}\n`;
+  const open = !OPEN_MIC_OK ? '' : config.openMic
+    ? ` Always listening is ON: the mic is open with no wake word or key, so what you hear may be ${userName} talking to someone else or a video; if a request makes no sense as one for you, answer in a few words or not at all.`
+    : '';
+  const spot = config.pin ? ' You stay on one spot of their screen (pinned); self_mode moves you or has you follow the cursor again.' : '';
+  return `- Hearing: you understand ${lang} speech now (${others} is the other choice, on the Listening page; one at a time).${wake}${open}${voice}${spot}\n`;
 };
 // Today's tokens and this conversation's context budget, said with every request: questions about usage and how much
 // room is left ("ใช้ token ไปเท่าไหร่แล้ว") are answerable without any tool call. The Usage page in the panel has the detail.
@@ -1896,6 +1903,8 @@ function menu() {
     { id: 'stop', label: 'Stop', enabled: busy },
     // One click from the tray turns the always-on microphone off (or back on).
     ...(WAKE_OK && VOICE_OK && config.voice && voiceReady() ? [{ id: 'wakeword', label: `Listen for “${WAKE_PHRASE}”`, checked: !!config.wakeWord }] : []),
+    ...(OPEN_MIC_OK && config.voice && voiceReady() ? [{ id: 'openmic', label: 'Always Listening (no wake word)', checked: !!config.openMic }] : []),
+    { id: 'follow', label: 'Follow the Cursor', checked: !config.pin },
     { id: 'diagnostics', label: 'Save Diagnostics…', enabled: !diagnosing },
     ...(update.available ? [{ sep: true }, { id: 'install_update', label: update.page ? `Get Roamies ${update.available}…` : update.installing ? `Installing ${update.available}…` : `Install Update ${update.available} and Restart`, enabled: !update.installing }] : []),
     { sep: true },
@@ -2008,7 +2017,7 @@ function panelState() {
 }
 
 
-const voiceConfig = () => send({ type: 'voice_config', enabled: VOICE_OK && config.voice && voiceReady(), mute: config.muteWhileTalking !== false, sound: !!config.sound, wake: (MAC || (WAKE_OK && wakeReady())) && !!config.wakeWord, ...(WAKE_OK ? { wakeDir: WAKE_DIR } : {}), wakeName: config.wakeName || '', ...(NEEDS_MODEL ? { model: MODEL_DIR } : {}) });
+const voiceConfig = () => send({ type: 'voice_config', enabled: VOICE_OK && config.voice && voiceReady(), mute: config.muteWhileTalking !== false, sound: !!config.sound, wake: (MAC || (WAKE_OK && wakeReady())) && !!config.wakeWord, open: OPEN_MIC_OK && !!config.openMic, ...(WAKE_OK ? { wakeDir: WAKE_DIR } : {}), wakeName: config.wakeName || '', ...(NEEDS_MODEL ? { model: MODEL_DIR } : {}) });
 
 // Progress goes to the setup guide often and to the tray menu now and then.
 let modelShownAt = 0, modelMenuAt = 0;
@@ -2054,6 +2063,29 @@ function setSpeechLang(lang) {
 // The wake word on Windows, on or off. Turning it on fetches its models first if they aren't here yet; if that
 // fails it stays off, and says why.
 let wakeFetching = false;
+// Where the Sidekick stays (a pinned spot, or following the cursor) and the open mic: from the tray menu, a drag and
+// drop, or by asking (the self_mode tool).
+const pinOf = (p) => (p && Number.isFinite(p.fx) && Number.isFinite(p.fy) ? { fx: Math.min(1, Math.max(0, +p.fx)), fy: Math.min(1, Math.max(0, +p.fy)) } : null);
+function setMode({ place, openMic } = {}) {
+  const notes = [];
+  if (place) {
+    config.pin = place === 'follow' ? null : pinOf(PLACES[place]);
+    ui({ kind: 'pin', pin: config.pin });
+    notes.push(config.pin ? `You now stay at the ${place.replace('-', ' ')} of the screen.` : 'You follow the cursor again.');
+  }
+  if (openMic != null) {
+    if (!OPEN_MIC_OK) notes.push('Always listening is not available on this computer.');
+    else if (!config.voice || !voiceReady()) notes.push('Voice is off or not set up, so always listening cannot start.');
+    else {
+      config.openMic = !!openMic; agentStale = true; voiceConfig();
+      logLine('open_mic', { on: config.openMic });
+      notes.push(config.openMic ? 'Always listening is on: the mic stays open and whatever they say comes to you (not while you talk).' : 'Always listening is off.');
+    }
+  }
+  saveConfig(); menu();
+  return notes.join(' ') || 'Nothing changed.';
+}
+
 async function setWakeWord(on) {
   if (!WAKE_OK || wakeFetching) return;
   if (on && !wakeReady()) {
@@ -2272,6 +2304,8 @@ async function onMenu(id, via) {
   else if (id.startsWith('lang:') && NEEDS_MODEL) setSpeechLang(id.slice(5));
   else if (id === 'mutetalk') { config.muteWhileTalking = config.muteWhileTalking === false; saveConfig(); voiceConfig(); menu(); }
   else if (id === 'autolisten') { config.autoListen = !config.autoListen; saveConfig(); menu(); }
+  else if (id === 'openmic' && OPEN_MIC_OK) setMode({ openMic: !config.openMic });
+  else if (id === 'follow') setMode({ place: config.pin ? 'follow' : 'bottom-right' });
   else if (id === 'snoozelisten') { config.snoozeListen = !config.snoozeListen; saveConfig(); menu(); }
   else if (id === 'wakeword' && WAKE_OK) setWakeWord(!config.wakeWord);
   else if (id === 'wakeword' && MAC) { config.wakeWord = !config.wakeWord; saveConfig(); agentStale = true; voiceConfig(); menu(); }
@@ -2545,6 +2579,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     retired.then((notes) => { if (notes.length) { retired = Promise.resolve([]); say(`${notes.join(' ')} Do it on the Model page in ${PANEL}.`, 'concerned'); } });
     ui({ kind: 'sound', on: config.sound });
     ui({ kind: 'size', size: sizeNow() });
+    ui({ kind: 'pin', pin: pinOf(config.pin) });
     ui({ kind: 'look', look: config.look ?? 'classic' });
     if (config.onboarded) ui({ kind: 'greet' });
     agents.sync();
@@ -2561,6 +2596,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   else if (m.type === 'reply_said') { if (!busy) { holdWake(false); saidPending = false; clearTimeout(saidCap); stir(); } }
   else if (m.type === 'listen_cancel') { autoTurn = null; send({ type: 'listen_cancel' }); } // Esc while the mic is on
+  else if (m.type === 'pinned') { config.pin = pinOf(m.pin); saveConfig(); menu(); logLine('pinned', { pin: config.pin }); } // dragged and dropped
   // A link clicked on the research card: web and mail links only.
   else if (m.type === 'open_link') { const v = checkLink(m.url); if (v.level === SAFE) openUrl(String(m.url)); else console.error('open_link blocked:', v.reason); }
   else if (m.type === 'list_toggle') toggleItem(String(m.id)).catch((e) => console.error('list', e));

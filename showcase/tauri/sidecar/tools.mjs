@@ -231,7 +231,14 @@ export function sideSearchFor(route) {
 // Every request and redirect hop of web_fetch goes through safety.mjs, by name and by the addresses it resolves to.
 export const guardFetch = async (url) => { const v = await checkFetch(url); return v.level === BLOCK ? `Blocked for safety: ${v.reason}` : null; };
 
-export function createTools({ allowActions, ui, ask, openUrl, onCommitments, focus = null, firedReminders = () => [], showList, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: 'Roamies isn\'t running.' }), workdir = HOME, own = null, sideSearch = async () => null, pointScale = () => 'pixels', announce = () => {}, roadMaps = null }) {
+// The spots self_mode can pin the Sidekick to: across (fx) and down (fy) the screen, 0 to 1.
+export const PLACES = {
+  'top-left': { fx: 0, fy: 0 }, top: { fx: 0.5, fy: 0 }, 'top-right': { fx: 1, fy: 0 },
+  left: { fx: 0, fy: 0.5 }, center: { fx: 0.5, fy: 0.5 }, right: { fx: 1, fy: 0.5 },
+  'bottom-left': { fx: 0, fy: 1 }, bottom: { fx: 0.5, fy: 1 }, 'bottom-right': { fx: 1, fy: 1 },
+};
+
+export function createTools({ setMode = null, allowActions, ui, ask, openUrl, onCommitments, focus = null, firedReminders = () => [], showList, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: 'Roamies isn\'t running.' }), workdir = HOME, own = null, sideSearch = async () => null, pointScale = () => 'pixels', announce = () => {}, roadMaps = null }) {
   // Relative paths (and run_command) start in workdir: the home folder for the chat, its own folder for an agent.
   const at = (p) => { const s = String(p ?? ''); return /^~(?=$|\/|\\)/.test(s) || path.isAbsolute(s) || /^[a-z]:[\\/]/i.test(s) ? s : path.join(workdir, s); };
   const where = workdir === HOME ? "the user's home folder" : `its working folder (${workdir})`;
@@ -753,6 +760,16 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, foc
   };
 
   const tools = [
+    {
+      // Where the Sidekick sits and whether the mic is always open: what the tray menu does, by asking.
+      name: 'self_mode',
+      description: 'Where you sit on their screen, and the always-listening mic. {place}: stay on that spot ("ไปอยู่มุมขวาบน", "stay at the bottom left") instead of following the cursor, or \'follow\' to follow the cursor again. {openMic: true} keeps the mic open all the time with no wake word ("เปิดไมค์รอฟังตลอด"); false turns it off. They can also drag you anywhere: you stay where they drop you.',
+      parameters: z.object({
+        place: z.enum(['top-left', 'top', 'top-right', 'left', 'center', 'right', 'bottom-left', 'bottom', 'bottom-right', 'follow']).optional(),
+        openMic: z.boolean().optional(),
+      }),
+      execute: async ({ place, openMic }) => (setMode ? setMode({ place, openMic }) : 'Not available here.'),
+    },
     {
       name: 'take_screenshot',
       description: "Look at the user's screen. target: 'front' = just the window they're working in (best default when they say 'this' or 'here'), an app name like 'browser', 'Safari', 'Figma' or 'Notes' (works even if it's hidden behind other windows), 'window:<id>' from list_windows, or 'screen' for everything.",

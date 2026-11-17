@@ -198,6 +198,13 @@ const SPEECH_LEVEL: f64 = 0.15;
 // Hands-free, a take also ends once this much more sound came in without new words: steady noise or a voice in the
 // background can keep the level up, but it doesn't keep adding to what was said (#64).
 const STALE_ENDS: f64 = 4.0;
+// Open mic (always listening, no wake word): a voice this long starts a quiet take. Nothing shows until the take
+// reads as real words, so a cough, a door or a TV mumble never pops the listening bubble.
+const OPEN_ONSET: f64 = 0.25;
+// The sound just before the onset is kept, so the first syllable isn't clipped.
+const OPEN_KEEP: f64 = 0.8;
+// A quiet take that heard nothing worth showing gives up after this much silence.
+const OPEN_GIVE_UP: f64 = 1.2;
 
 /// The room's steady noise on the level scale, so background noise (a fan, a TV, a busy room) doesn't count as talking
 /// and keep a hands-free take open (#64). It starts at the take's first reading, falls almost at once to a quieter
@@ -233,6 +240,15 @@ impl NoiseFloor {
 /// What was said, ignoring case and punctuation: a re-read that only moves a comma isn't new words.
 fn words(text: &str) -> String {
     text.chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).flat_map(char::to_lowercase).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Open mic: whether a quiet take heard something meant for Roamies, not a filler the recogniser makes up from noise
+/// ("Thank you.", "ครับ") or a sound too short to be a request.
+fn real_words(text: &str) -> bool {
+    const FILLER: [&str; 14] = ["thank you", "thanks", "you", "okay", "ok", "yeah", "bye", "hmm", "ครับ", "ค่ะ", "คะ", "อืม", "เอ่อ", "อ่า"];
+    let w = words(text);
+    let letters = w.chars().filter(|c| c.is_alphanumeric()).count();
+    letters >= 4 && !FILLER.contains(&w.as_str())
 }
 
 struct Voice {
@@ -275,6 +291,11 @@ struct Voice {
     wake_dir: Option<PathBuf>,
     wake: Option<wake::Wake>,
     wake_after: f64,
+    // Open mic: on or off, since when a voice has been going on while waiting, and whether the take now running was
+    // started by it and hasn't shown itself yet.
+    open_on: bool,
+    open_voice: Option<f64>,
+    quiet: bool,
 }
 
 impl Voice {
@@ -315,6 +336,9 @@ impl Voice {
             wake_dir: None,
             wake: None,
             wake_after: 0.0,
+            open_on: false,
+            open_voice: None,
+            quiet: false,
         }
     }
 
@@ -341,8 +365,16 @@ impl Voice {
         self.ink.follow(now);
         match self.phase {
             Phase::Holding | Phase::HandsFree => self.maybe_read(now),
-            // Nothing is read while waiting for the wake word, so the take isn't kept either.
-            Phase::Wake => self.buf.lock().unwrap().clear(),
+            // Nothing is read while waiting for the wake word, so the take isn't kept either. With the open mic the
+            // last moment is kept, for the take a voice starts.
+            Phase::Wake => {
+                let mut b = self.buf.lock().unwrap();
+                let keep = if self.open_on { (OPEN_KEEP * RATE as f64) as usize } else { 0 };
+                if b.len() > keep {
+                    let cut = b.len() - keep;
+                    b.drain(..cut);
+                }
+            }
             Phase::Finishing => {
                 if self.tail_until.is_some_and(|t| now >= t) {
                     self.tail_until = None;
@@ -388,7 +420,7 @@ impl Voice {
                     // The talk chord works as ever; the mic is already open, so not even the first word is lost.
                     self.leave_wake();
                     self.arm(now);
-                } else if !self.wake_on || self.wake_hold {
+                } else if !(self.wake_on || self.open_on) || self.wake_hold {
                     self.stop_wake();
                 }
             }
@@ -424,7 +456,12 @@ impl Voice {
                 }
                 let quiet = now - self.heard_at.max(self.voice_at);
                 let stale = self.read_len.saturating_sub(self.heard_len) as f64 / RATE as f64;
-                if !self.best.is_empty() && quiet > PAUSE_ENDS {
+                // An open-mic take that hasn't heard real words: dropped without a word once the sound stops, or
+                // when Roamies starts talking.
+                if self.quiet && (self.wake_hold || (!self.reading && now - self.voice_at > OPEN_GIVE_UP)) {
+                    self.end("open mic: nothing for me", now);
+                    self.cancel();
+                } else if !self.best.is_empty() && quiet > PAUSE_ENDS {
                     self.end("pause", now);
                     self.finish();
                 } else if !self.best.is_empty() && stale > STALE_ENDS {
@@ -447,6 +484,7 @@ impl Voice {
     }
 
     fn arm(&mut self, now: f64) {
+        self.quiet = false;
         self.phase = Phase::Armed;
         self.chord_at = now;
         self.best.clear();
@@ -468,25 +506,35 @@ impl Voice {
     // ---------- the wake word ----------
 
     fn wake_allowed(&self, now: f64) -> bool {
-        self.wake_on && !self.wake_hold && now >= self.wake_after && self.engine.is_some() && self.env.is_some() && self.wake_dir.as_deref().is_some_and(wake::present) && keys::mic_allowed()
+        (self.open_on || self.wake_ready()) && !self.wake_hold && now >= self.wake_after && self.engine.is_some() && keys::mic_allowed()
+    }
+
+    fn wake_ready(&self) -> bool {
+        self.wake_on && self.env.is_some() && self.wake_dir.as_deref().is_some_and(wake::present)
     }
 
     /// Open the mic and wait for the phrase. Quiet when it can't: this wasn't asked for just now, so a mic that's
     /// busy or unplugged is only logged, and tried again later.
     fn start_wake(&mut self, now: f64) {
-        if self.wake.is_none() {
-            let (Some(env), Some(dir)) = (self.env.clone(), self.wake_dir.clone()) else { return };
-            let config = ExecutionConfig::new().with_environment(env).with_intra_threads(1).with_inter_threads(1);
-            self.wake = Some(wake::spawn(dir, config, self.tx.clone()));
+        let phrase = self.wake_ready();
+        if phrase && self.wake.is_none() {
+            if let (Some(env), Some(dir)) = (self.env.clone(), self.wake_dir.clone()) {
+                let config = ExecutionConfig::new().with_environment(env).with_intra_threads(1).with_inter_threads(1);
+                self.wake = Some(wake::spawn(dir, config, self.tx.clone()));
+            }
         }
-        let Some(w) = self.wake.clone() else { return };
-        let _ = w.tx.try_send(wake::Msg::Reset);
+        if let Some(w) = &self.wake {
+            let _ = w.tx.try_send(wake::Msg::Reset);
+        }
+        self.open_voice = None;
         match self.open_source() {
             Ok(s) => {
                 self.source = Some(s);
                 self.phase = Phase::Wake;
-                w.set(true);
-                log("waiting for the wake word");
+                if let Some(w) = &self.wake {
+                    w.set(phrase);
+                }
+                log(if self.open_on { "open mic: waiting for a voice" } else { "waiting for the wake word" });
             }
             Err(e) => {
                 log(&format!("wake word: no mic, {} ({})", e.detail, e.reason));
@@ -516,6 +564,25 @@ impl Voice {
         log(&format!("wake word heard (score {score:.2})"));
         self.leave_wake();
         self.listen_now();
+    }
+
+    /// Open mic: a voice went on long enough. Listen to it quietly, keeping the sound from just before; it shows
+    /// (and goes to Roamies) only once it reads as real words.
+    fn open_take(&mut self, now: f64) {
+        log("open mic: heard a voice");
+        self.leave_wake();
+        self.phase = Phase::HandsFree;
+        self.quiet = true;
+        self.best.clear();
+        self.spoke = true;
+        self.take += 1;
+        self.reading = false;
+        self.read_len = 0;
+        self.heard_len = 0;
+        self.read_at = now - READ_EVERY;
+        self.listen_at = now;
+        self.heard_at = now;
+        self.voice_at = now;
     }
 
     fn show_listening(&mut self, mode: &str, now: f64) {
@@ -588,6 +655,9 @@ impl Voice {
         if !matches!(self.phase, Phase::Armed | Phase::Holding | Phase::HandsFree) {
             return;
         }
+        if self.quiet {
+            return self.cancel();
+        }
         let shown = self.phase != Phase::Armed;
         self.report_empty = shown;
         self.phase = Phase::Finishing;
@@ -627,7 +697,13 @@ impl Voice {
                 }
             }
             self.best = text;
-            if !matches!(self.phase, Phase::Idle | Phase::Armed) {
+            if self.quiet && self.phase == Phase::HandsFree && real_words(&self.best) {
+                // An open-mic take heard words: from here on it's an ordinary hands-free take.
+                self.quiet = false;
+                log("open mic: words, listening");
+                emit(json!({ "type": "state", "state": "listening", "mode": "handsfree" }));
+            }
+            if !matches!(self.phase, Phase::Idle | Phase::Armed) && !self.quiet {
                 emit(json!({ "type": "partial", "text": self.best }));
             }
         }
@@ -638,8 +714,23 @@ impl Voice {
 
     fn on_level(&mut self, v: f64) {
         let now = self.now();
-        if self.floor.is_voice(v, now) {
+        let voice = self.floor.is_voice(v, now);
+        if voice {
             self.voice_at = now;
+        }
+        if self.phase == Phase::Wake && self.open_on && !self.wake_hold {
+            if voice && v > SPEECH_LEVEL {
+                let since = *self.open_voice.get_or_insert(now);
+                if now - since >= OPEN_ONSET {
+                    self.open_voice = None;
+                    self.open_take(now);
+                }
+            } else if !voice {
+                self.open_voice = None;
+            }
+        }
+        if self.quiet {
+            return;
         }
         if v > SPEECH_LEVEL && self.phase != Phase::Idle {
             self.spoke = true;
@@ -660,6 +751,7 @@ impl Voice {
         self.final_until = None;
         self.take += 1;
         self.phase = Phase::Idle;
+        self.quiet = false;
         self.wake_after = self.now() + WAKE_COOLDOWN;
         let text = self.best.trim().to_string();
         let area = self.ink.take();
@@ -698,9 +790,13 @@ impl Voice {
         self.phase = Phase::Idle;
         self.report_empty = false;
         let now = self.now();
-        self.wake_after = now + WAKE_COOLDOWN;
+        let quiet = std::mem::take(&mut self.quiet);
+        // A quiet open-mic take was never shown: nothing to close, and the mic waits again at once.
+        self.wake_after = if quiet { now } else { now + WAKE_COOLDOWN };
         self.ink.clear(now);
-        emit(json!({ "type": "state", "state": "idle", "cancelled": true }));
+        if !quiet {
+            emit(json!({ "type": "state", "state": "idle", "cancelled": true }));
+        }
     }
 
     /// Start listening hands-free without a key press (after an area snap). Ends on a pause or a tap.
@@ -769,6 +865,11 @@ impl Voice {
                     log(&format!("wake word: {}", if self.wake_on { "on" } else { "off" }));
                 }
                 Some("wake_hold") => self.wake_hold = msg.get("on").and_then(Value::as_bool) == Some(true),
+                // Open mic: always listening, no wake word. Whatever is said goes to Roamies (held while it talks).
+                Some("open_mic") => {
+                    self.open_on = msg.get("on").and_then(Value::as_bool) == Some(true);
+                    log(&format!("open mic: {}", if self.open_on { "on" } else { "off" }));
+                }
                 Some("chord") => {
                     let mods: Vec<String> = msg.get("mods").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default();
                     self.set_chord(&mods);
@@ -1003,6 +1104,16 @@ mod tests {
     fn the_mic_list_names_each_mic_once() {
         let names = ["USB Mic", "Built-in", "USB Mic", "", "Headset"].map(String::from);
         assert_eq!(audio::unique(names), ["USB Mic", "Built-in", "Headset"]);
+    }
+
+    #[test]
+    fn open_mic_wants_real_words() {
+        assert!(real_words("เปิด Notepad ให้หน่อย"));
+        assert!(real_words("what time is it"));
+        assert!(!real_words("Thank you."));
+        assert!(!real_words("ครับ"));
+        assert!(!real_words("อ่า"));
+        assert!(!real_words("Hm."));
     }
 
     #[test]
