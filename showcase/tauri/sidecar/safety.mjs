@@ -480,14 +480,37 @@ export const isYes = (text) => /^\s*(y|yes|yeah|yep|yup|ok|okay|sure|go|go ahead
 
 // ---------- drawing on screen ----------
 
+// Road maps (roadmap.mjs) reach only these: OpenFreeMap for the style, vector tiles, fonts and icons (the overlay's
+// map frame allows exactly MAP_HOSTS in its CSP, ink.js), and Nominatim for place names (asked by the sidecar only).
+export const MAP_HOSTS = ['tiles.openfreemap.org'];
+export const MAP_STYLE = 'https://tiles.openfreemap.org/styles/dark';
+export const GEOCODER = 'https://nominatim.openstreetmap.org/search';
+
 /** What a draw call may do beyond drawing. kind: 'open' (a page in the browser, like a link in a reply), 'photo' and
  *  'favicon' (fetched for a card, like web_fetch), 'type' (into a field, like act_in_app: only with actions allowed;
  *  the macOS helper still refuses the HANDS_OFF apps), 'copy' (to the clipboard), 'button' (a next-step button:
- *  ask sends its words as a new request, open and copy follow the rules above). */
+ *  ask sends its words as a new request, open and copy follow the rules above), 'map' (an address a road map loads:
+ *  https on MAP_HOSTS, or the geocoder, only), 'geocode' (a place name sent to the geocoder: words of a place only,
+ *  never an email address, a phone number or a link). */
 export function checkDrawAction({ kind, url, text, action } = {}, { allowActions = false } = {}) {
   switch (kind) {
     case 'open': return checkLink(url);
     case 'photo': case 'favicon': return checkUrl(url);
+    case 'map': {
+      const v = checkUrl(url);
+      if (v.level === BLOCK) return v;
+      const u = new URL(String(url));
+      if (u.protocol !== 'https:' || u.port || !(MAP_HOSTS.includes(u.hostname) || `${u.origin}${u.pathname}` === GEOCODER)) return verdict(BLOCK, `A map only loads from ${[...MAP_HOSTS, new URL(GEOCODER).hostname].join(' and ')}.`);
+      return verdict(SAFE);
+    }
+    case 'geocode': {
+      const q = String(text ?? '').trim();
+      if (!q || q.length > 100) return verdict(BLOCK, 'A place name is 1 to 100 characters.');
+      if (/[^\s@]+@[^\s@]+\.[^\s@]+/.test(q)) return verdict(BLOCK, 'A place name never holds an email address.');
+      if (/(?:\d[\s-]?){9,}/.test(q)) return verdict(BLOCK, 'A place name never holds a phone or account number.');
+      if (/[a-z][a-z0-9+.-]*:\/\/|www\./i.test(q)) return verdict(BLOCK, 'A place name never holds a link.');
+      return verdict(SAFE);
+    }
     case 'type':
       if (!allowActions) return verdict(BLOCK, 'Typing into apps is switched off (Allow File Edits & Commands).');
       if (!String(text ?? '').length || String(text).length > 2000) return verdict(BLOCK, 'Nothing (or far too much) to type.');

@@ -8,6 +8,10 @@ rm -rf dist && mkdir -p dist
 cp ../desktop.html dist/
 cp -R ../roamies ../onboarding ../panel dist/
 ../tauri/sidecar/bundle.sh
+# The road map card's MapLibre: a sidecar devDependency (exact version, so `npm ci` there fetches it), copied beside
+# the overlay's files. ink.js loads it only when a road map opens, into the map's sandboxed frame; never from a CDN.
+mkdir -p dist/roamies/vendor
+for f in maplibre-gl.js maplibre-gl.css LICENSE.txt; do cp "sidecar/node_modules/maplibre-gl/dist/$f" "dist/roamies/vendor/${f/LICENSE/maplibre-gl.LICENSE}"; done
 # Ship a Node.js runtime with the app, for the target being built (--target <triple>, else this machine).
 TARGET=""; prev=""; for a in "$@"; do [ "$prev" = "--target" ] && TARGET="$a"; prev="$a"; done
 ../tauri/sidecar/fetch-node.sh ${TARGET:+"$TARGET"}

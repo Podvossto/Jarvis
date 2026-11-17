@@ -7,6 +7,7 @@ import { checkUrl } from './safety.mjs';
 import { COUNTRIES } from './countries.mjs';
 import { LIMITS as CHART_LIMITS, TYPES as CHART_TYPES, checkChart, chartSvg } from './chart.mjs';
 import { LIMITS as FIGURE_LIMITS, SHAPES as FIGURE_SHAPES, TONES as FIGURE_TONES, checkFigure, figurePayload } from './figure.mjs';
+import { checkRoadMap, isRoadMap } from './roadmap.mjs';
 
 export const LIMITS = { beats: 12, marks: 40, points: 200, parts3d: 40, atoms: 120, photoBytes: 800_000, iconBytes: 64_000,
   nodes: 16, links: 24, columns: 6, rows: 12, bars: 12, labels: 8, pins: 12, shade: 40, routes: 8, steps: 10, tex: 300, vertices: 16, questions: 6, cardsShown: 4,
@@ -92,7 +93,12 @@ const Mark = z.object({
   labels: z.array(z.object({ text: z.string().min(1).max(30), x: num, y: num })).max(LIMITS.labels).optional(),
   region: z.string().max(80).optional(),
   shade: z.array(z.object({ name: z.string().min(1).max(50), tone: z.enum(TONES).optional() })).max(LIMITS.shade).optional(),
-  pins: z.array(z.object({ name: z.string().min(1).max(30), lat: num, lon: num })).max(LIMITS.pins).optional(),
+  // A pin by lat, lon, or (on a road map) by place: a name looked up, or "lat,lon".
+  pins: z.array(z.object({ name: z.string().min(1).max(30), lat: num.optional(), lon: num.optional(), place: z.string().min(1).max(100).optional() })).max(LIMITS.pins).optional(),
+  // A road map (roadmap.mjs): centred on place, at zoom: a named scope or a level (one type, no union: some providers
+  // reject them; a number is taken as its words and checked there).
+  place: z.string().min(1).max(100).optional(),
+  zoom: z.preprocess((v) => (typeof v === 'number' ? String(v) : v), z.string().max(12)).optional(),
   routes: z.array(z.object({ from: z.string().min(1).max(30), to: z.string().min(1).max(30), tone: z.enum(TONES).optional() })).max(LIMITS.routes).optional(),
   steps: z.array(z.object({ tex: z.string().min(1).max(160), note: z.string().max(80).optional() })).max(LIMITS.steps).optional(),
   vertices: z.array(z.object({ id: z.string().min(1).max(8), x: num, y: num })).max(LIMITS.vertices).optional(),
@@ -216,6 +222,8 @@ const CHECKS = {
     return out;
   },
   map(m) {
+    // place, zoom, a pin by place or a Thai province to shade: a real road map, checked in roadmap.mjs.
+    if (isRoadMap(m)) return checkRoadMap(m);
     const out = [], pins = m.pins ?? [];
     if (!m.region && !m.shade?.length && !pins.length) return ['needs region, shade (countries to colour in) or pins.'];
     for (const p of pins) if (!(Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180)) out.push(`pin "${p.name}": lat must be between -90 and 90 and lon between -180 and 180 (south and west are negative).`);
@@ -352,7 +360,8 @@ export async function resolveTargets(beats, look) {
         if (m.kind === 'figure') { o.fig = figurePayload(m.figure); delete o.figure; }
         // The rest arrive already worked out, like a molecule: the overlay only lays them out.
         if (m.kind === 'flow') o.lay = flowLayers(m.nodes, m.links);
-        if (m.kind === 'map') Object.assign(o, resolveRegion(m));
+        // A road map's places are looked up with the photos (tools.mjs prepare): they're network round trips.
+        if (m.kind === 'map' && !isRoadMap(m)) Object.assign(o, resolveRegion(m));
         if (m.kind === 'math') o.steps = m.steps.map((s) => ({ ...s, tree: parseTex(s.tex) }));
         if (m.kind === 'quiz') o.questions = m.questions.map((q) => ({ ...q, right: q.options.map(sameText).indexOf(sameText(q.answer)) }));
         return [o];
@@ -367,7 +376,7 @@ export async function resolveTargets(beats, look) {
 const quote = (s) => `“${String(s).replace(/\s+/g, ' ').slice(0, 40)}”`;
 /** What a mark is, in a few words, for the tool result: ring “Export”, card “Compound interest”. */
 export function partDesc(m) {
-  const words = m.label ?? m.title ?? m.heading ?? m.at?.name ?? m.text ?? m.query ?? m.smiles ?? m.region ?? m.nodes?.[0]?.text ?? m.columns?.join(', ')
+  const words = m.label ?? m.title ?? m.heading ?? m.at?.name ?? m.text ?? m.query ?? m.smiles ?? m.region ?? m.place ?? m.nodes?.[0]?.text ?? m.columns?.join(', ')
     ?? m.bars?.[0]?.label ?? m.steps?.[0]?.tex ?? m.questions?.[0]?.text ?? m.shade?.[0]?.name ?? m.pins?.[0]?.name ?? m.vertices?.map((v) => v.id).join('') ?? '';
   return `${m.kind}${words ? ` ${quote(words)}` : ''}`;
 }

@@ -302,6 +302,23 @@ console.log('sed print tests: all passed');
   assert.equal(lv({ kind: 'button', action: { do: 'run', value: 'rm -rf ~' } }), BLOCK, 'run button');
   assert.equal(lv({ kind: 'handoff' }), SAFE, 'hand off');
   assert.equal(lv({ kind: 'delete' }), BLOCK, 'unknown action');
+  // Road maps: only OpenFreeMap over https, and the geocoder's own address; a place name carries a place, nothing else.
+  assert.equal(lv({ kind: 'map', url: 'https://tiles.openfreemap.org/planet/20261115/{z}/{x}/{y}.pbf' }), SAFE, 'map tiles');
+  assert.equal(lv({ kind: 'map', url: 'https://tiles.openfreemap.org/styles/dark' }), SAFE, 'map style');
+  assert.equal(lv({ kind: 'map', url: 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=Siam' }), SAFE, 'geocoder');
+  assert.equal(lv({ kind: 'map', url: 'http://tiles.openfreemap.org/styles/dark' }), BLOCK, 'map over plain http');
+  assert.equal(lv({ kind: 'map', url: 'https://tiles.openfreemap.org:8443/x' }), BLOCK, 'map on another port');
+  assert.equal(lv({ kind: 'map', url: 'https://tiles.openfreemap.org.evil.example/x' }), BLOCK, 'a look-alike host');
+  assert.equal(lv({ kind: 'map', url: 'https://nominatim.openstreetmap.org/reverse?lat=1&lon=2' }), BLOCK, 'the geocoder for anything but search');
+  assert.equal(lv({ kind: 'map', url: 'https://example.com/tiles/1/2/3.pbf' }), BLOCK, 'tiles from anywhere else');
+  assert.equal(lv({ kind: 'map', url: 'https://localhost/x' }), BLOCK, 'this computer');
+  assert.equal(lv({ kind: 'geocode', text: 'วัดพระแก้ว กรุงเทพ' }), SAFE, 'a Thai place name');
+  assert.equal(lv({ kind: 'geocode', text: '99/1 Moo 5, Mae Rim, Chiang Mai 50180' }), SAFE, 'an address with a postcode');
+  assert.equal(lv({ kind: 'geocode', text: '' }), BLOCK, 'no place');
+  assert.equal(lv({ kind: 'geocode', text: 'x'.repeat(101) }), BLOCK, 'far too long a place');
+  assert.equal(lv({ kind: 'geocode', text: 'near somchai@example.co.th' }), BLOCK, 'an email address');
+  assert.equal(lv({ kind: 'geocode', text: 'ร้าน 081-234-5678' }), BLOCK, 'a phone number');
+  assert.equal(lv({ kind: 'geocode', text: 'https://maps.example/?q=home' }), BLOCK, 'a link');
   console.log('draw action tests: all passed');
 }
 

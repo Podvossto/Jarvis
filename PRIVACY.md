@@ -29,6 +29,11 @@ key) receives:
 
 **Wikipedia** is used to fetch photos for photo cards, and websites' `favicon.ico` is fetched for source cards.
 
+**OpenFreeMap** (tiles.openfreemap.org) serves the map pictures for road-map cards (so it sees which area is shown), and **Nominatim**
+(nominatim.openstreetmap.org, run by the OpenStreetMap Foundation) turns the place names on them into locations. Only the
+place name the map shows is sent (for example "Wat Pho, Bangkok"), at most one a second, with the app's name and nothing
+about you; names already looked up aren't sent again.
+
 **Websites** that you or the agent open or fetch (for example with its `web_fetch` tool) receive the usual
 request a browser would send.
 
