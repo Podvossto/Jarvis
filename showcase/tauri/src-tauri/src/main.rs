@@ -1106,11 +1106,11 @@ fn build_overlays(app: &AppHandle) -> tauri::Result<()> {
             .position(pos.x, pos.y)
             .inner_size(size.width, size.height)
             .initialization_script(init);
-        // Windows: Chromium's native window occlusion tracker reads a fullscreen transparent overlay (layered,
-        // click-through) as fully occluded the moment another app sits over it, and then suspends rAF — the whole
-        // animation — mid-request. Turn the tracker off for this webview (the tauri default features stay listed).
+        // Windows: Chromium suspends rAF when it decides a page is occluded, and a fullscreen transparent overlay
+        // reads as occluded the moment a maximised app sits over it — the character then freezes mid-pose for the
+        // whole request. Keep it drawing (the tauri default features stay in the list).
         #[cfg(windows)]
-        let b = b.additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows");
+        let b = b.additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-backgrounding-occluded-windows");
         let w = b.build()?;
         w.set_ignore_cursor_events(true)?;
         #[cfg(target_os = "linux")]
