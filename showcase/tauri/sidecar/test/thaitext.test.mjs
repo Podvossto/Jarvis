@@ -73,6 +73,6 @@ assert.ok(bestPass < 10, `reSegment alone took ${bestPass.toFixed(1)} ms (> 10 m
 // panel) never is — the call lives only on the voice branch.
 const side = readFileSync(fileURLToPath(new URL('../sidekick.mjs', import.meta.url)), 'utf8');
 assert.match(side, /import \{ reSegment \} from '\.\/thaitext\.mjs';/, 'sidekick imports reSegment from thaitext.mjs');
-assert.match(side, /onSpoken\(reSegment\(m\.text\.trim\(\)\), m\.area\);/, 'voice transcripts pass through reSegment on the way in');
+assert.match(side, /const said = reSegment\(m\.text\.trim\(\)\);\s*onSpoken\(config\.speechLang === 'en' \? said : englishWords\(said\), m\.area\);/, 'voice transcripts pass through reSegment, then English words back to English, on the way in');
 assert.equal(side.split('reSegment(').length - 1, 1, 'reSegment is called on the voice path only, never on typed text');
 console.log('thaitext tests: passed');
