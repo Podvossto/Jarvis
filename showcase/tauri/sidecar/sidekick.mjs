@@ -40,6 +40,7 @@ import { createLocalTts, localTtsCommand } from './localtts.mjs';
 import { DEFAULT_SPEECH_LANG, SPEECH_LANGS, WAKE, WAKE_PHRASE, downloadModel, isReady, modelDir, sizeLabel, speechModel, totalBytes } from './voicemodel.mjs';
 import { copyText, createTools, expand, fitImage, imageBlock, winOpen } from './tools.mjs';
 import { describeMarks } from './marks.mjs';
+import { clickIntent, pickControl } from './fastclick.mjs';
 import { faviconFor } from './draw.mjs';
 import { QUESTIONS, openNote, answerTurn, wantsSkip, endsChat, splitTurn, plain, stripNote, tourBeats, goalFrom, showcaseBeats } from './intro.mjs';
 import { SpeechText, CueFilter, VOICE_CUES, endsWithQuestion } from './speech.mjs';
@@ -1227,7 +1228,8 @@ async function prompt(text, image = null, note = '', byVoice = false, news = nul
     const quiz = takeQuizNote();
     // They spoke first: untold news rides along with their message, so it's never announced separately afterwards.
     const along = desk.along(text, { intro: !!intro, news: !!news, agentish });
-    const stamped = `[${stampNow()}] ${text}${quiz ? `\n(${quiz})` : ''}${along}`;
+    const quick = quickNote && Date.now() - quickNote.at < 30 * 60_000 ? quickNote.note : null; quickNote = null;
+    const stamped = `[${stampNow()}] ${text}${quiz ? `\n(${quiz})` : ''}${quick ? `\n(${quick})` : ''}${along}`;
     const asked = agentish ? `${stamped}\n(They asked for an agent: call send_agent.)` : stamped;
     const sent = brief ? `${asked}\n(${brief.note})` : asked;
     // An area snap rides along as an image in the same message.
@@ -2150,7 +2152,7 @@ async function typeToAsk() {
   const ctl = barAsk = new AbortController();
   const text = await ask({ placeholder: 'Ask me anything…', bar: true }, ctl.signal);
   if (barAsk === ctl) barAsk = null;
-  if (text?.trim()) enqueue(text.trim());
+  if (text?.trim() && !(await quickClick(text.trim()))) enqueue(text.trim());
 }
 function onWriteTap() {
   if (onboarding) return;
@@ -2321,8 +2323,32 @@ let snapping = false;
 // Words said while ⌃⌥ was held, maybe with an area marked by drawing on the screen at the same time.
 // A short spoken stop stops everything, the queue too; any other words join the queue rather than cancelling it.
 const STOP_WORDS = /^(?:หยุด|หยุดนะ|พอแล้ว|พอก่อน|ยกเลิก|เลิก|เงียบ|stop|stop it|never ?mind|cancel)[!.?…]*\s*$/i;
+// The quick click (fastclick.mjs): a request that is one plain click on something with exactly those words in the
+// front window is done at once, with no model call. Anything else, and any failure, falls through to the model.
+// What it clicked rides along with the next request, so the model knows the screen changed.
+let quickNote = null;
+async function quickClick(text) {
+  if (busy || queued || intro || onboarding || !HANDS_OK || !config.allowActions) return false;
+  const label = clickIntent(text);
+  if (!label) return false;
+  const t0 = Date.now();
+  try {
+    const res = await hands('ui', 'front', 'controls');
+    const c = pickControl(label, res.controls);
+    if (!c) { logLine('quick_click', { hit: false, ms: Date.now() - t0 }); return false; }
+    await hands('act', JSON.stringify({ steps: [{ do: 'click', id: c.id }], window: res.window.id }));
+    logLine('quick_click', { hit: true, ms: Date.now() - t0 });
+    quickNote = { at: Date.now(), note: `Just before this, they asked "${text.slice(0, 80)}" and the app itself clicked "${c.label}" in ${res.window.app} for them, without asking you: the screen has changed since.` };
+    say(/[ก-๛]/.test(text) ? `กด ${c.label} แล้ว` : `Clicked ${c.label}.`);
+    return true;
+  } catch (e) {
+    logLine('quick_click', { hit: false, ms: Date.now() - t0, error: String(e?.message ?? e).slice(0, 160) });
+    return false;
+  }
+}
 async function onSpoken(text, area) {
   if (busy && !area?.file && STOP_WORDS.test(text.trim())) { interruptQuietly('they said stop'); say('Okay, stopping.'); return; }
+  if (!area?.file && await quickClick(text.trim())) return;
   if (!area?.file) return enqueue(text, { image: takeSnap(), byVoice: true });
   try {
     await fitImage(area.file);
