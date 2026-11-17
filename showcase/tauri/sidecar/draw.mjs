@@ -5,7 +5,8 @@
 import { z } from 'zod';
 import { checkUrl } from './safety.mjs';
 import { COUNTRIES } from './countries.mjs';
-import { AVAILABLE as CHARTS_AVAILABLE, LIMITS as CHART_LIMITS, TYPES as CHART_TYPES, checkChart, chartSvg } from './chart.mjs';
+import { LIMITS as CHART_LIMITS, TYPES as CHART_TYPES, checkChart, chartSvg } from './chart.mjs';
+import { LIMITS as FIGURE_LIMITS, SHAPES as FIGURE_SHAPES, TONES as FIGURE_TONES, checkFigure, figurePayload } from './figure.mjs';
 
 export const LIMITS = { beats: 12, marks: 40, points: 200, parts3d: 40, atoms: 120, photoBytes: 800_000, iconBytes: 64_000,
   nodes: 16, links: 24, columns: 6, rows: 12, bars: 12, labels: 8, pins: 12, shade: 40, routes: 8, steps: 10, tex: 300, vertices: 16, questions: 6, cardsShown: 4,
@@ -14,8 +15,10 @@ export const TONES = ['accent', 'teal', 'amber', 'coral', 'lilac', 'sky', 'lime'
 // Marks on the real screen (they need a place on it), actions in apps, and cards drawn on calm space.
 export const SCREEN = ['point', 'target', 'hover', 'ring', 'frame', 'underline', 'strike', 'check', 'cross', 'connect', 'trace', 'num', 'label', 'write', 'scroll', 'spotlight', 'highlight', 'line', 'curve', 'arrow', 'circle', 'rect'];
 export const ACTIONS = ['emote', 'sfx', 'type', 'copy', 'open', 'handoff', 'button'];
-export const CARDS = ['card', 'note', 'list', 'mindmap', 'clip', 'sources', 'photo', 'graph', 'chart', 'legend', 'timeline', 'molecule', 'model', 'flow', 'table', 'bars', 'map', 'math', 'geometry', 'quiz', 'ticket', 'medal', 'html'];
-export const KINDS = [...SCREEN, ...ACTIONS, ...CARDS];
+export const CARDS = ['card', 'note', 'list', 'mindmap', 'clip', 'sources', 'photo', 'graph', 'chart', 'legend', 'timeline', 'molecule', 'model', 'flow', 'table', 'bars', 'map', 'math', 'geometry', 'quiz', 'ticket', 'medal', 'html', 'figure'];
+// Points at a part of a figure card drawn in an earlier beat: no card of its own, no place on the screen.
+export const ON_CARDS = ['callout'];
+export const KINDS = [...SCREEN, ...ACTIONS, ...CARDS, ...ON_CARDS];
 // Drawn from a list of points (screenshot pixels) instead of one place.
 const PATHS = new Set(['trace', 'line', 'curve', 'arrow']);
 const EMOTES = ['hype', 'wave', 'upset', 'remind', 'motivate'];
@@ -32,6 +35,13 @@ const Target = z.object({
   id: z.number().int().optional(),
   x: num.optional(), y: num.optional(), w: num.optional(), h: num.optional(),
 });
+// A figure's shapes, in its own units (view), y down: the few fields each type uses, all optional here and checked
+// by type in figure.mjs, where the model gets words it can act on.
+const figTone = z.enum(Object.keys(FIGURE_TONES));
+const FigShape = z.object({ type: z.enum(FIGURE_SHAPES), d: z.string().max(FIGURE_LIMITS.pathChars).optional(), points: z.array(pair).max(LIMITS.points).optional(),
+  ...Object.fromEntries(['x', 'y', 'cx', 'cy', 'r', 'rx', 'ry', 'w', 'h', 'x1', 'y1', 'x2', 'y2', 'width', 'size', 'opacity'].map((k) => [k, num.optional()])),
+  text: z.string().max(FIGURE_LIMITS.text).optional(), tone: figTone.optional(), fill: figTone.optional(), dash: z.boolean().optional() });
+const ChartAxis = z.object({ label: z.string().max(30).optional(), unit: z.string().max(12).optional(), min: num.optional(), max: num.optional(), log: z.boolean().optional() });
 const Mark = z.object({
   kind: z.enum(KINDS),
   at: Target.optional(), to: Target.optional(), tie: Target.optional(),
@@ -66,15 +76,18 @@ const Mark = z.object({
   chart: z.object({
     type: z.enum(CHART_TYPES), title: z.string().min(1).max(60).optional(),
     x: z.object({ categories: z.array(z.string().min(1).max(40)).max(LIMITS.chartCategories).optional(), label: z.string().max(30).optional(), unit: z.string().max(12).optional(), min: num.optional(), max: num.optional(), time: z.boolean().optional() }).optional(),
-    y: z.object({ label: z.string().max(30).optional(), unit: z.string().max(12).optional(), min: num.optional(), max: num.optional(), log: z.boolean().optional() }).optional(),
+    y: ChartAxis.optional(), y2: ChartAxis.optional(),
     series: z.array(z.object({ name: z.string().min(1).max(40), data: z.array(z.any()).max(LIMITS.chartPoints).optional(), values: z.array(num).max(LIMITS.chartPoints).optional(),
-      tone: z.enum(TONES).optional(), dash: z.boolean().optional(), smooth: z.boolean().optional(), stack: z.string().max(20).optional(), points: z.boolean().optional() })).max(LIMITS.chartSeries).optional(),
+      tone: z.enum(TONES).optional(), dash: z.boolean().optional(), smooth: z.boolean().optional(), stack: z.string().max(20).optional(), points: z.boolean().optional(),
+      err: z.array(num).max(LIMITS.chartPoints).optional(), axis: z.enum(['left', 'right']).optional(), as: z.enum(['bar', 'line']).optional() })).max(LIMITS.chartSeries).optional(),
     stacked: z.boolean().optional(), bins: z.number().int().optional(),
     slices: z.array(z.object({ name: z.string().min(1).max(40), value: num, tone: z.enum(TONES).optional() })).max(LIMITS.chartSlices).optional(),
     grid: z.object({ x: z.array(z.string().min(1).max(30)).max(LIMITS.chartCategories), y: z.array(z.string().min(1).max(30)).max(LIMITS.chartCategories), z: z.array(z.array(num).max(LIMITS.chartCategories)).max(LIMITS.chartCategories) }).optional(),
     lines: z.array(z.object({ x: num.optional(), y: num.optional(), text: z.string().max(30).optional(), tone: z.enum(TONES).optional() })).max(6).optional(),
     notes: z.array(z.object({ x: num, y: num, text: z.string().min(1).max(40), tone: z.enum(TONES).optional() })).max(8).optional(),
   }).optional(),
+  figure: z.object({ view: pair, parts: z.array(z.object({ id: z.string().min(1).max(20), label: z.string().max(FIGURE_LIMITS.label).optional(), tone: figTone.optional(), fill: figTone.optional(),
+    shapes: z.array(FigShape).max(FIGURE_LIMITS.shapes) })).max(FIGURE_LIMITS.parts) }).optional(),
   unit: z.string().max(12).optional(),
   labels: z.array(z.object({ text: z.string().min(1).max(30), x: num, y: num })).max(LIMITS.labels).optional(),
   region: z.string().max(80).optional(),
@@ -106,6 +119,7 @@ const hasAt = (t) => !!t && (t.text != null || t.id != null || (t.x != null && t
 export function checkDraw(args) {
   const out = [], beats = args.beats ?? [], edits = args.edit ?? [];
   if (!beats.length && !edits.length) out.push('Give beats to draw, or edit to change what is drawn.');
+  let fig = null;
   beats.forEach((b, i) => {
     b.marks.forEach((m, j) => {
       const where = `beat ${i + 1} mark ${j + 1} (${m.kind})`, need = (ok, what) => { if (!ok) out.push(`${where}: needs ${what}.`); };
@@ -136,6 +150,12 @@ export function checkDraw(args) {
       if (m.kind === 'molecule') { need(m.smiles, 'smiles'); if (m.smiles) { try { parseSmiles(m.smiles); } catch (e) { out.push(`${where}: ${e.message}`); } } }
       if (m.kind === 'ticket') need(m.title, 'title');
       if (m.kind === 'medal') need(m.text, 'text');
+      if (m.kind === 'figure' && m.figure) fig = m.figure;
+      if (m.kind === 'callout') {
+        const ids = (fig?.parts ?? []).map((p) => p.id);
+        if (!fig) out.push(`${where}: a callout points at a part of a figure drawn before it in this same draw call; draw the figure in an earlier beat first.`);
+        else if (m.name != null && !ids.includes(m.name)) out.push(`${where}: no part of the figure has the id "${m.name}" (parts: ${quoted(ids)}).`);
+      }
     });
     if (b.wait && !b.marks.some((m) => SCREEN.includes(m.kind) && hasAt(m.at))) out.push(`beat ${i + 1}: wait needs a mark on the thing to ${b.wait} (a target or hover with at).`);
   });
@@ -181,10 +201,9 @@ const CHECKS = {
     if (!out.length && !m.bars.some((b) => b.value > 0)) out.push('every value is 0; at least one bar needs a value above 0.');
     return out;
   },
+  figure: (m) => (m.figure ? checkFigure(m.figure) : ['needs figure ({view: [w, h], parts: [{id, label, shapes}]}).']),
   chart(m) {
-    if (!m.chart) return ['needs chart (the spec).'];
-    if (!CHARTS_AVAILABLE.includes(m.chart.type)) return [`chart type "${m.chart.type}" isn't available yet (available: ${CHARTS_AVAILABLE.join(', ')}); use one of those.`];
-    return checkChart(m.chart);
+    return m.chart ? checkChart(m.chart) : ['needs chart (the spec).'];
   },
   html(m) {
     if (!m.html || !m.html.trim()) return ['needs html (the page to show).'];
@@ -329,6 +348,8 @@ export async function resolveTargets(beats, look) {
         if (m.kind === 'molecule') o.mol = parseSmiles(m.smiles);
         // The chart's picture is drawn here (offline): the overlay gets the finished SVG.
         if (m.kind === 'chart') o.svg = chartSvg(m.chart);
+        // The figure as SVG, whole and part by part; the spec itself stays here.
+        if (m.kind === 'figure') { o.fig = figurePayload(m.figure); delete o.figure; }
         // The rest arrive already worked out, like a molecule: the overlay only lays them out.
         if (m.kind === 'flow') o.lay = flowLayers(m.nodes, m.links);
         if (m.kind === 'map') Object.assign(o, resolveRegion(m));
@@ -369,7 +390,7 @@ export function createParts() {
     assign(beats) {
       const ids = [];
       for (const b of beats) for (const m of b.marks) {
-        if (SILENT.has(m.kind)) continue;
+        if (SILENT.has(m.kind) || ON_CARDS.includes(m.kind)) continue;
         m.part = `p${++n}`;
         all.set(m.part, { kind: m.kind, desc: partDesc(m), screen: SCREEN.includes(m.kind) || m.kind === 'type' || (m.kind === 'button' && !!m.at) });
         ids.push(m.part);
@@ -395,6 +416,12 @@ export function createParts() {
     get ids() { return [...all.keys()]; },
     describe: (ids = [...all.keys()]) => describeParts(ids.map((id) => [id, all.get(id)]).filter(([, p]) => p)),
   };
+}
+/** Marks each figure that later beats call out (quiet: it opens without its names, which come one at a time). */
+export function linkCallouts(beats) {
+  let fig = null;
+  for (const b of beats ?? []) for (const m of b.marks) { if (m.kind === 'figure') fig = m; else if (m.kind === 'callout' && fig) fig.quiet = true; }
+  return beats;
 }
 /** "p1 ring “Export”, p2 card “Interest”" — the ids the model edits with. */
 export const describeParts = (entries) => entries.map(([id, p]) => `${id} ${p.desc}`).join(', ');

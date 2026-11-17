@@ -1072,7 +1072,97 @@
     quiz: (m) => drawQuiz(m),
     ticket: (m) => drawTicket(m),
     medal: (m) => drawMedal(m),
+    figure: (m) => drawFigure(m),
+    callout: (m) => callout(m),
   };
+
+  // ---------------------------------------------------------------- figures: a picture in named parts, one called out at a time
+  // The sidecar sends the whole picture and each part on its own (figure.mjs). Where a part is comes from drawing it
+  // alone offscreen and reading its pixels, so any shape works without putting SVG into the page.
+  const svgImage = (svg) => new Promise((res) => {
+    const i = new Image(), t = setTimeout(() => res(null), 4000);
+    i.onload = () => { clearTimeout(t); res(i.naturalWidth && i.naturalHeight ? i : null); };
+    i.onerror = () => { clearTimeout(t); res(null); };
+    i.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  });
+  function litBox(img, vw, vh) {
+    const k = Math.min(2, 640 / Math.max(vw, vh)), w = Math.ceil(vw * k), h = Math.ceil(vh * k), o = document.createElement('canvas');
+    o.width = w; o.height = h;
+    const g = o.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0, w, h);
+    const d = g.getImageData(0, 0, w, h).data, pts = [], step = Math.max(1, Math.round(k * 2)); let x0 = w, y0 = h, x1 = -1, y1 = -1;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (d[(y * w + x) * 4 + 3] > 24) {
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      if (x % step === 0 && y % step === 0) pts.push([x / k, y / k]);
+    }
+    return x1 < 0 ? null : { box: [x0 / k, y0 / k, (x1 - x0 + 1) / k, (y1 - y0 + 1) / k], pts };
+  }
+  // Where a leader line meets its part: the part's own ink nearest the name, so lines to rings and outlines (the
+  // sclera, a casing) land on the ring beside the name instead of all meeting at the middle of its box.
+  const nearest = (pts, x, y) => { let best = pts[0], bd = Infinity; for (const p of pts) { const q = (p[0] - x) ** 2 + (p[1] - y) ** 2; if (q < bd) { bd = q; best = p; } } return best; };
+  const figures = []; // figure cards, newest last: what a callout points into
+  const FIG = { COL: 140, PAD: 12, GAP: 16 };
+  async function drawFigure(m) {
+    const F = m.fig; if (!F) return null;
+    const [VW, VH] = F.view, S = Math.min(320 / VW, 260 / VH), FW = Math.round(VW * S), FH = Math.round(VH * S), { COL, PAD, GAP } = FIG;
+    const w = FW + 2 * COL, h = 26 + FH + 2 * PAD;
+    const [full, ...imgs] = await Promise.all([svgImage(F.svg), ...F.parts.map((p) => svgImage(p.svg))]);
+    const parts = F.parts.map((p, i) => { const lit = imgs[i] ? litBox(imgs[i], VW, VH) : null; return { ...p, img: imgs[i], box: lit?.box ?? null, pts: lit?.pts ?? [] }; });
+    let glow = null;
+    if (full) { glow = document.createElement('canvas'); glow.width = FW; glow.height = FH; const g = glow.getContext('2d'); g.filter = 'blur(3px)'; g.drawImage(full, 0, 0, FW, FH); }
+    // focus: the part called out (the rest dims); names: every part named at once (a figure nobody calls out, or a recap).
+    const st = { parts, S, focus: null, names: !m.quiet, t0: 0 };
+    // Names in the columns either side, each level with its part where the others let it be (no two closer than GAP).
+    const lay = (list, fx, fy) => {
+      const out = [];
+      for (const right of [false, true]) {
+        const side = list.filter((p) => (p.box[0] + p.box[2] / 2 > VW / 2) === right).map((p) => ({ p, right, y: fy + (p.box[1] + p.box[3] / 2) * S })).sort((a, q) => a.y - q.y);
+        // Many names on a side: spread down its whole height in their parts' order, so the lines fan out less.
+        if (side.length > 3) side.forEach((s, i) => { s.y = fy + 8 + ((FH - 10) * (i + 0.5)) / side.length; });
+        side.forEach((s, i) => { s.y = Math.max(s.y, fy + 8, i ? side[i - 1].y + GAP : -Infinity); });
+        for (let i = side.length - 1; i >= 0; i--) side[i].y = Math.min(side[i].y, i < side.length - 1 ? side[i + 1].y - GAP : fy + FH - 2);
+        out.push(...side);
+      }
+      return out;
+    };
+    const c = await card(m, w, h, function (b, l, t, x, y, age) {
+      const fx = x + COL, fy = y + PAD, u = clamp(age / 0.5, 0, 1);
+      if (!full) { typed(b, 'no picture drawn', x + w / 2, fy + FH / 2, SMALL, DIM, 1, { anchor: 'middle' }); return; }
+      const f = st.focus, fu = f ? clamp((t - st.t0) / 0.9, 0, 1) : 1, dim = f ? 1 - 0.72 * clamp(fu * 3, 0, 1) : 1;
+      b.save(); b.globalAlpha *= u * dim; b.drawImage(full, fx, fy, FW, FH); b.restore();
+      l.save(); l.globalCompositeOperation = 'lighter'; l.globalAlpha *= 0.4 * u * dim; l.drawImage(glow, fx, fy, FW, FH); l.restore();
+      // The part called out: drawn whole again on the lit layer, which glows like the pen's ink, and breathes a little.
+      if (f?.img) { b.drawImage(f.img, fx, fy, FW, FH); l.save(); l.globalAlpha *= reduced() ? 0.8 : 0.6 + 0.3 * Math.sin((t - st.t0) * 4); l.drawImage(f.img, fx, fy, FW, FH); l.restore(); }
+      const named = f ? (f.box ? [f] : []) : st.names && u >= 1 ? parts.filter((p) => p.box) : [];
+      for (const s of lay(named, fx, fy)) {
+        const p = s.p, [ax, ay] = nearest(p.pts, s.right ? VW : 0, (s.y - fy) / S), ex = fx + ax * S + (s.right ? 2 : -2), cy = fy + ay * S;
+        const lx = s.right ? fx + FW + 10 : fx - 10, k = clamp(fu * 2.2, 0, 1);
+        l.save(); l.strokeStyle = ACC; l.lineWidth = 1.4; l.beginPath(); l.moveTo(lx + (s.right ? -4 : 4), s.y - 4); l.lineTo(lerp(lx + (s.right ? -4 : 4), ex, k), lerp(s.y - 4, cy, k)); l.stroke();
+        if (k >= 1) { l.fillStyle = HOT; l.fillRect(ex - 2.5, cy - 2.5, 5, 5); }
+        l.restore();
+        const name = ellipsize(p.label, COL - 18, `600 11px ${MONO}`);
+        typed(b, name, lx, s.y, `600 11px ${MONO}`, TEXT, (fu - 0.3) * 2.5, { anchor: s.right ? 'start' : 'end', rim: 3 });
+      }
+    }, { title: m.title || 'figure', live: (t) => !!st.focus && t - st.t0 < 8 && !reduced() });
+    c.fig = st; figures.push(c);
+    for (let i = figures.length - 1; i >= 0; i--) if (!figures[i].alive) figures.splice(i, 1);
+    sfx('scan');
+    return c;
+  }
+  // A callout: the pen goes to that part of the newest figure and its name comes out beside it while the rest dims.
+  // Without a name, every part is named again (the recap).
+  async function callout(m) {
+    const c = [...figures].reverse().find((q) => q.alive && !q.leaving && (m.name == null || q.fig.parts.some((p) => p.id === m.name)));
+    if (!c) return null;
+    const st = c.fig, p = m.name == null ? null : st.parts.find((q) => q.id === m.name);
+    Object.assign(st, { focus: p, names: !p, t0: now() }); touch(1.2);
+    if (p?.box) {
+      // The pen lands on the part's own ink (the middle of a ring is not the ring).
+      const [ax, ay] = nearest(p.pts, p.box[0] + p.box[2] / 2, p.box[1] + p.box[3] / 2);
+      const [sx, sy] = xf(c, [c.ox + FIG.COL + ax * st.S, c.oy + 26 + FIG.PAD + ay * st.S, 0, 0]);
+      await fly(sx, sy); sfx('tick');
+    }
+    return null;
+  }
 
   // ---------------------------------------------------------------- molecules: a 2D layout from the parsed SMILES
   // Ring templates (each small ring wants to be a regular polygon) plus springs on bonds and 120° angles, and a push
