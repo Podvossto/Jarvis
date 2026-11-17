@@ -28,7 +28,7 @@ export function terms(t) {
     const w = s.segment;
     if (NO_SPACES.test(w)) {
       if ([...w].length >= 2 && !STOP_TH.has(w)) out.set(w, { text: w, whole: false });
-      if (prev && !STOP_TH.has(prev) && !STOP_TH.has(w)) out.set(prev + w, { text: prev + w, whole: false });
+      if (prev && !STOP_TH.has(prev) && !STOP_TH.has(w) && !out.has(prev + w)) out.set(prev + w, { text: prev + w, whole: false, joined: true });
       prev = w;
     } else {
       prev = null;
@@ -46,8 +46,11 @@ export const words = (t) => new Set(terms(t).filter((x) => x.whole).map((x) => x
 export function sections(text, file) {
   const out = [];
   const src = String(text).replace(/\r\n?/g, '\n');
-  const lead = src.split(/\n(?=#{2,6}\s)/)[0].slice(0, 400); // the title and intro, before the first sub-heading
-  const titleHay = `${file.replace(/[-_./\\]+/g, ' ')} ${lead}`.toLowerCase().normalize('NFC');
+  // The title and intro (before the first sub-heading), without list items or table rows: those are content (an
+  // index listing every project isn't *about* each of them).
+  const lead = src.split(/\n(?=#{2,6}\s)/)[0].split('\n').filter((l) => !/^\s*([-*+|]|\d+\.)\s/.test(l)).join('\n').slice(0, 400);
+  const titleText = `${file.replace(/[-_./\\]+/g, ' ')} ${lead}`;
+  const titleHay = titleText.toLowerCase().normalize('NFC'), titleWords = words(titleText);
   let heading = '', buf = [];
   const flush = () => {
     const body = buf.join('\n').trim();
@@ -56,7 +59,7 @@ export function sections(text, file) {
     for (let i = 0; i < body.length; i += LIMITS.section) {
       const piece = body.slice(i, i + LIMITS.section);
       const all = `${file.replace(/[-_./\\]+/g, ' ')} ${lead} ${heading} ${piece}`;
-      out.push({ file, heading, text: piece, words: words(all), hay: all.toLowerCase().normalize('NFC'), titleHay });
+      out.push({ file, heading, text: piece, words: words(all), hay: all.toLowerCase().normalize('NFC'), titleHay, titleWords });
     }
   };
   for (const line of src.split('\n')) {
@@ -90,6 +93,7 @@ export async function listNotes(dir) {
 const isPinned = (file) => path.basename(file).startsWith('_');
 const byNewest = (a, b) => b.mtime - a.mtime || a.file.localeCompare(b.file);
 const hit = (s, t) => (t.whole ? s.words.has(t.text) : s.hay.includes(t.text));
+const inTitle = (s, t) => (t.whole ? s.titleWords.has(t.text) : s.titleHay.includes(t.text));
 
 /**
  * The index of one folder. getDir() names the folder (empty: none). refresh() rescans when the folder changed or a
@@ -149,25 +153,28 @@ export function createNotes({ getDir, now = () => Date.now() }) {
     const q = terms(query);
     const N = index.sections.length;
     if (!q.length || !N) return [];
-    const weight = q.map((t) => { let df = 0; for (const s of index.sections) if (hit(s, t)) df++; return df ? Math.log(1 + N / df) : 0; });
+    // Weight: rarer is stronger. A word of the question the notes never mention still counts in the total (as rare as
+    // can be), so "สูตรต้มยำกุ้ง" isn't "related" to a note that only shares สูตร; a Thai join the breaker might have
+    // missed (หา|งาน → หางาน) counts only where it's really in the notes.
+    const weight = q.map((t) => { let df = 0; for (const s of index.sections) if (hit(s, t)) df++; return df ? Math.log(1 + N / df) : t.joined ? 0 : Math.log(1 + N / 0.5); });
     const total = weight.reduce((a, b) => a + b, 0);
     if (!total) return [];
-    // A word that is in the name or title of only a few notes names something ("Cinema", "ฝึกงาน"): a note named by the
-    // question is the answer even when it doesn't share the question's other words ("Our Cinema มีบั๊กไหม" goes to
-    // the cinema note, not to the one note that says บั๊ก).
-    const titles = [...new Map(index.sections.map((s) => [s.file, s.titleHay])).values()];
+    // A word in the name or title of only a few notes names something ("Cinema", "ฝึกงาน"): the notes it names get its
+    // weight again, so they outrank a note that merely mentions it, by as much as that word matters in the question.
+    const titles = [...new Map(index.sections.map((s) => [s.file, s])).values()];
     const nameLimit = Math.max(2, Math.ceil(titles.length * 0.2));
-    const names = q.map((t) => { const n = titles.filter((h) => h.includes(t.text)).length; return n > 0 && n <= nameLimit; });
+    const names = q.map((t) => { const n = titles.filter((s) => inTitle(s, t)).length; return n > 0 && n <= nameLimit; });
     const hits = [];
     for (const s of index.sections) {
-      let got = 0, named = false;
+      let got = 0, own = 0;
       q.forEach((t, i) => {
         if (!weight[i] || !hit(s, t)) return;
         got += weight[i];
-        if (names[i] && s.titleHay.includes(t.text)) named = true;
+        if (names[i] && inTitle(s, t)) own += weight[i];
       });
-      // The overview that lists every project is named by all of them: it never outranks the project's own note.
-      if (named || got >= total * 0.3) hits.push({ s, score: got / total + (named ? 1 : 0) - (isPinned(s.file) ? 1.2 : 0) + (s.mtime ?? 0) / 1e15 });
+      // A note the question names gets a fixed lift over notes that only mention its words; the overview that lists
+      // every project is named by all of them, so it never outranks the project's own note.
+      if (own > 0 || got >= total * 0.3) hits.push({ s, score: got / total + (own > 0 ? 0.6 + 0.4 * (own / total) : 0) - (isPinned(s.file) ? 1.2 : 0) + (s.mtime ?? 0) / 1e15 });
     }
     hits.sort((a, b) => b.score - a.score);
     return hits.slice(0, limit).map(({ s, score }) => ({ file: s.file, heading: s.heading, text: s.text, score }));
