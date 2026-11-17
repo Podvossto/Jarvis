@@ -191,6 +191,13 @@ console.log('store tests: all passed');
     { role: 'tool', content: [{ type: 'tool_result', toolCallId: id, content: [{ type: 'image', mediaType: 'image/jpeg', data: id }] }] }];
   const read = (id) => [{ role: 'assistant', content: [{ type: 'tool_call', id, name: 'read_window', args: {} }] },
     { role: 'tool', content: [{ type: 'tool_result', toolCallId: id, content: 'Brave — Settings\n1 button "Back"\n2 link "Billing"' }] }];
+  // Regression: act_in_app answers with the whole window too, and 33 of those stayed in an 80K-token conversation.
+  const act = (id, text) => [{ role: 'assistant', content: [{ type: 'tool_call', id, name: 'act_in_app', args: {} }] },
+    { role: 'tool', content: [{ type: 'tool_result', toolCallId: id, content: text }] }];
+  const acted = S5.fitContext([{ role: 'user', content: 'q1' }, ...act('k1', 'In ZCode: clicked "Save"\n' + '1 button "x"\n'.repeat(200)), ...act('k2', 'In ZCode: clicked "Save"'), { role: 'user', content: 'q2' }, ...act('k3', 'ZCode\n' + '1 button "x"\n'.repeat(200))], { budgetTokens: 1e6 });
+  assert.match(acted[2].content[0].content, /^In ZCode: clicked "Save"\n\[The full list/, 'an old long one keeps what it did');
+  assert.equal(acted[4].content[0].content, 'In ZCode: clicked "Save"', 'a short one is left alone');
+  assert.ok(acted[7].content[0].content.length > 2000, "the newest request's is whole");
   const turn1 = [{ role: 'system', content: 'sys' }, { role: 'user', content: 'q1' }, ...read('r1'), ...shot('s1'), { role: 'assistant', content: 'a1' }];
   const msgs = [...turn1, { role: 'user', content: 'q2' }, ...shot('s2'), ...shot('s3'), ...shot('s4')];
   const f = S5.fitContext(msgs, { budgetTokens: 1e6 });
@@ -315,6 +322,14 @@ console.log('store tests: all passed');
   const again = S8.planFold([...next, ...Array.from({ length: 20 }, (_, i) => req(100 + i)).flat()], { trigger: 75_000 });
   assert.ok(again.ok && again.start === 1 && again.summary === 'They asked about files.');
   assert.ok(!again.folded.some(S8.isSummary), 'the old summary is not a folded turn');
+  // Regression: Thai counts for far more tokens than the estimate, so a 98K-token conversation looked too small to
+  // fold and never was. The measured size scales the estimate.
+  const thai = conv.slice(0, 24); // about 12K estimated tokens: too little by the estimate alone
+  assert.equal(S8.planFold(thai, { trigger: 48_000 }).ok, false);
+  const scaled = S8.planFold(thai, { trigger: 48_000, scale: 2 });
+  assert.ok(scaled.ok && thai[scaled.end].role === 'user', 'folds once the real size is known');
+  assert.ok(S8.approxTokens(thai.slice(scaled.end)) * 2 >= 12_000, 'keeps the newest quarter of the trigger, in real tokens');
+  assert.equal(S8.planFold(thai, { trigger: 48_000, scale: 0.2 }).ok, false, 'a scale under 1 is not trusted');
   // A low trigger (live tests) shrinks what's kept and the minimum with it.
   assert.ok(S8.planFold(conv.slice(0, 16), { trigger: 4000 }).ok, 'low trigger folds a short conversation');
   // The folded raw turns are archived next to their session, privately.
