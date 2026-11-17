@@ -37,10 +37,6 @@ static SIDEKICK_OVERLAY: Mutex<Option<String>> = Mutex::new(None);
 static ONBOARDING: AtomicBool = AtomicBool::new(false);
 const ONBOARDING_LABEL: &str = "onboarding";
 const PANEL_LABEL: &str = "panel";
-// One WebView2 environment per app: every webview must pass the SAME additional args, or wry builds a second
-// environment over the same user data folder and creation fails with 0x8007139F (invalid state).
-#[cfg(windows)]
-const WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-backgrounding-occluded-windows --disable-accelerated-2d-canvas";
 /// When the panel last hid because it lost focus: a click on the icon that caused it mustn't reopen it.
 static PANEL_BLURRED: Mutex<Option<Instant>> = Mutex::new(None);
 /// Counts opens, so a close that's still playing its animation can tell it was opened again and stay up.
@@ -760,8 +756,6 @@ fn show_panel(app: &AppHandle, rect: Option<tauri::Rect>, toggle: bool) {
                 .transparent(true)
                 .shadow(false)
                 .visible(false);
-            #[cfg(windows)]
-            let b = b.additional_browser_args(WEBVIEW_ARGS);
             match b.build() {
                 Ok(w) => {
                     #[cfg(target_os = "macos")]
@@ -1110,14 +1104,15 @@ fn build_overlays(app: &AppHandle) -> tauri::Result<()> {
             .focused(false)
             .focusable(false)
             .position(pos.x, pos.y)
-            .inner_size(size.width, size.height - 1.0)
+            .inner_size(size.width, size.height)
             .initialization_script(init);
-        // Windows: the window sits 1px short of the screen so WebView2 never rates it fully occluded — a
-        // covered overlay gets its compositor suspended and the character freezes mid-request. The
-        // accelerated 2D canvas of the transparent layered window also corrupts the whole screen with
-        // dither-static when the overlay is composited to the front, so the canvas draws in software.
+        // Windows: Chromium's native window occlusion tracker reads a fullscreen transparent overlay (layered,
+        // click-through) as fully occluded the moment another app sits over it, and then suspends rAF — the whole
+        // animation — mid-request. Turn the tracker off for this webview. GPU compositing of the transparent
+        // layered window also corrupts the whole screen with dither-static on some drivers (seen when the overlay
+        // is brought to the front), so its composite runs in software. The tauri default features stay listed.
         #[cfg(windows)]
-        let b = b.additional_browser_args(WEBVIEW_ARGS);
+        let b = b.additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-gpu-compositing");
         let w = b.build()?;
         w.set_ignore_cursor_events(true)?;
         #[cfg(target_os = "linux")]
