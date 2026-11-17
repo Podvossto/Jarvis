@@ -127,4 +127,15 @@ assert.equal(endsWithQuestion('Two options.\n- Paris\n- Rome\nWhich one?'), true
 assert.equal(endsWithQuestion('Ready? 🙂\n'), true);
 assert.equal(endsWithQuestion('He said "really?"'), true);
 assert.equal(endsWithQuestion(''), false);
+// Thai asks without a "?" (these are real replies that never opened the mic).
+assert.equal(endsWithQuestion('เมนูมีบันทึก บันทึกเป็น เปิด พิมพ์ ให้ผมกดบันทึกร่างสรุปต่อเลยไหมครับ'), true);
+assert.equal(endsWithQuestion('มีย่อ/ขยาย แถบสถานะ ให้เลือก จะให้กดอันไหนต่อครับ'), true);
+assert.equal(endsWithQuestion('เสียงหลอกไปหน่อย ระหว่างที่...อะไรหรอครับ'), true);
+assert.equal(endsWithQuestion('ส่งไปแล้ว อยากให้เช็กอีกรอบมั้ยคะ'), true);
+assert.equal(endsWithQuestion('เสร็จหรือยังครับ'), true);
+assert.equal(endsWithQuestion('ถ้าอยากปักร้าน วัด หรือจุดจอดรถเพิ่ม บอกชื่อมาได้เลยครับ'), false);
+assert.equal(endsWithQuestion('ได้เลยครับ ลบข้อความทั้งหน้าแล้วพิมพ์ร่างสรุปใหม่แทน ตามที่สั่ง'), false);
+assert.equal(endsWithQuestion('เปิดแผนที่ถนนเมืองเชียงใหม่ให้ดูครับ'), false);
+assert.equal(endsWithQuestion('เลือกอะไรก็ได้ครับ'), false);
+assert.equal(endsWithQuestion('จะไปกดเมนู File ในหน้าต่าง Notepad ครับ'), false);
 assert.equal(endsWithQuestion(null), false);
