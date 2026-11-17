@@ -1088,7 +1088,7 @@ fn build_overlays(app: &AppHandle) -> tauri::Result<()> {
         let unmanaged = linux::unmanaged_overlay();
         #[cfg(not(target_os = "linux"))]
         let unmanaged = false;
-        let w = WebviewWindowBuilder::new(app, label, WebviewUrl::App("desktop.html".into()))
+        let b = WebviewWindowBuilder::new(app, label, WebviewUrl::App("desktop.html".into()))
             .title("Roamies")
             .visible(!unmanaged)
             .transparent(true)
@@ -1105,8 +1105,13 @@ fn build_overlays(app: &AppHandle) -> tauri::Result<()> {
             .focusable(false)
             .position(pos.x, pos.y)
             .inner_size(size.width, size.height)
-            .initialization_script(init)
-            .build()?;
+            .initialization_script(init);
+        // Windows: Chromium suspends rAF when it decides a page is occluded, and a fullscreen transparent overlay
+        // reads as occluded the moment a maximised app sits over it — the character then freezes mid-pose for the
+        // whole request. Keep it drawing (the tauri default features stay in the list).
+        #[cfg(windows)]
+        let b = b.additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-backgrounding-occluded-windows");
+        let w = b.build()?;
         w.set_ignore_cursor_events(true)?;
         #[cfg(target_os = "linux")]
         if unmanaged {
