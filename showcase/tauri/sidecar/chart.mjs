@@ -1,8 +1,7 @@
 // The real-quality chart card's pieces: a declarative chart spec (what the model writes) is checked in words it can
 // fix, then rendered to an SVG with ECharts' server-side renderer — no DOM, no browser, no network. The overlay only
-// draws the SVG as a picture on a card. The spec, theme and limits come from the working prototype in
-// ~/.jarvis-tools/lab/visuals/chartspec.mjs; the checks, the text measuring, error bars, the right-hand axis and
-// bar+line were added here.
+// draws the SVG as a picture on a card. The spec, theme and limits come from an earlier working prototype; the
+// checks, the text measuring, error bars, the right-hand axis and bar+line were added here.
 import * as echarts from 'echarts';
 
 // The overlay's palette (ink.js TONES) and look.

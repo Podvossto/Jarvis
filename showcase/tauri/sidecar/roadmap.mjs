@@ -1,7 +1,7 @@
 // The road map: a map card that zooms down to streets. The overlay shows it with MapLibre in a sandboxed frame, on
 // OpenFreeMap's vector tiles (free, no key) restyled here into the overlay's ink. Place names are looked up with
 // Nominatim (one request a second at most, each answer kept), Thai provinces come from provinces.mjs, and only the
-// hosts in safety.mjs's MAP_HOSTS are ever reached. The design is the lab prototype's (~/.jarvis-tools/lab/visuals/map.html).
+// hosts in safety.mjs's MAP_HOSTS are ever reached.
 import { PROVINCES, Q } from './provinces.mjs';
 import { BLOCK, GEOCODER, MAP_STYLE, checkDrawAction } from './safety.mjs';
 
