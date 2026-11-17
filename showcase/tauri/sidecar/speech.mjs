@@ -169,5 +169,18 @@ export function endsWithQuestion(text) {
     .replace(/\[[a-z]+(?:[ ,-]+[a-z]+){0,3}\]\s*$/, '') // a free-form cue at the very end
     .replace(/[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u{FE0F}\u{200D}\u{20E3}]/gu, '')
     .replace(/[\s*_~`"'”’»)\]]+$/u, '');
-  return /[?？]$/.test(s);
+  return /[?？]$/.test(s) || thaiQuestion(s);
+}
+
+// Thai asks without a "?": "ให้ผมกดบันทึกต่อเลยไหมครับ", "จะให้กดอันไหนต่อครับ". The last clause (Thai sets clauses
+// apart with spaces) is a question when, its polite ending taken off, it ends on a question particle or holds a
+// question word. "อะไรก็ได้" (anything) and "ไม่ว่า…" (no matter…) are not.
+const TH_END = /(?:ครับ|คะ|ค่ะ|ค่า|คับ|จ้ะ|จ๊ะ|จ้า|นะ|ล่ะ|เนี่ย)+$/u;
+const TH_PARTICLE = /(?:ไหม|มั้ย|มั๊ย|ม้าย|เปล่า|ยัง|หรอ|เหรอ|หรือ|รึ|มิ|บ้าง|ไง|เนอะ|ป่าว)$/u;
+const TH_WORD = /ไหน|อะไร|ยังไง|อย่างไร|เมื่อไหร่|เมื่อไร|ใคร|ทำไม|เท่าไหร่|เท่าไร|กี่/u;
+function thaiQuestion(s) {
+  const clause = (s.split(/\s+/).pop() ?? '').replace(/[.!…。]+$/u, '');
+  if (!/[฀-๿]/.test(clause) || /ก็ได้|ไม่ว่า/.test(clause)) return false;
+  const core = clause.replace(TH_END, '');
+  return TH_PARTICLE.test(core) || TH_WORD.test(core);
 }
