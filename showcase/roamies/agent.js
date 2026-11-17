@@ -80,14 +80,35 @@
     return { cluster, n };
   };
 
+  // Thai vowel and tone marks sit on the letter before them: they take no column of their own (each used to get one,
+  // so "จังหวัด" read "จั งหวั ด"). Columns are counted, and letters drawn, by these clusters.
+  const MARK = /[ัิ-ฺ็-๎]/;
+  const vlen = (s) => { let n = 0; for (let i = 0; i < s.length; i++) if (!MARK.test(s[i])) n++; return n; };
+  R.vlen = vlen;
+  // Thai has no spaces between words, so a long Thai run would be cut mid-word ("ค|รับ"): it may also break where
+  // a word ends. The breaks come from the browser's own Thai word breaker, once per text.
+  const THAI = /[฀-๿]/, words = typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter('th', { granularity: 'word' }) : null;
+  let breaksFor = '', breaks = null;
+  const wordBreaks = (text) => {
+    if (text === breaksFor) return breaks;
+    breaksFor = text; breaks = new Set();
+    if (words && THAI.test(text)) for (const w of words.segment(text)) breaks.add(w.index);
+    return breaks;
+  };
   const wrap = (text, cols) => {
     const lines = [];
     let i = 0;
-    const n = text.length;
+    const n = text.length, wb = wordBreaks(text);
     while (i <= n) {
-      let end = i, lastSpace = -1;
-      while (end < n && text[end] !== '\n' && end - i < cols) { if (text[end] === ' ') lastSpace = end; end++; }
-      if (end < n && text[end] !== '\n' && end - i >= cols && lastSpace > i) end = lastSpace;
+      let end = i, lastSpace = -1, lastWord = -1, used = 0;
+      while (end < n && text[end] !== '\n' && (used < cols || MARK.test(text[end]))) {
+        if (text[end] === ' ') lastSpace = end;
+        else if (end > i && wb.has(end) && THAI.test(text[end - 1]) && THAI.test(text[end])) lastWord = end;
+        if (!MARK.test(text[end])) used++;
+        end++;
+      }
+      // Cut at a space, or else where a Thai word ends; the leftover Thai after a word break starts the next line.
+      if (end < n && text[end] !== '\n' && used >= cols && Math.max(lastSpace, lastWord) > i && !(wb.has(end) && THAI.test(text[end - 1]) && THAI.test(text[end]))) end = Math.max(lastSpace, lastWord);
       // Never cut an emoji (a surrogate pair) across two lines.
       else if (end < n && end > i + 1 && /[\ud800-\udbff]/.test(text[end - 1])) end--;
       lines.push({ start: i, s: text.slice(i, end) });
@@ -100,7 +121,8 @@
   const caretAt = (lines, caret) => {
     let li = 0;
     while (li + 1 < lines.length && lines[li + 1].start <= caret) li++;
-    return { li, col: Math.max(0, Math.min(lines[li]?.s.length ?? 0, caret - (lines[li]?.start ?? 0))) };
+    const s = lines[li]?.s ?? '', at = Math.max(0, Math.min(s.length, caret - (lines[li]?.start ?? 0)));
+    return { li, col: vlen(s.slice(0, at)) };
   };
   R.caretAt = caretAt;
 
@@ -474,7 +496,7 @@
         const src = bb.text ? bb.lines : wrap(bb.input.placeholder || ' ', MAX_COLS);
         // A live transcript arrives in jumps, so its bubble is full width from the start and only grows down.
         let cols = bb.input.listen ? MAX_COLS : 18;
-        for (const l of src) cols = Math.max(cols, Math.min(l.s.length + 1, MAX_COLS));
+        for (const l of src) cols = Math.max(cols, Math.min(vlen(l.s) + 1, MAX_COLS));
         const rows = clamp(src.length, 1, MAX_LINES);
         const meter = bb.input.listen ? (METER + 1) * k.P : 0;
         const footW = bb.input.choices ? choicesW(bb) : hintH(bb) ? G.textW(HINT, HINT_F) : 0;
@@ -482,7 +504,7 @@
       }
       const shownLines = bb.lines.filter((l) => l.start < Math.max(1, bb.shown) || l === bb.lines[0]);
       let cols = 4;
-      for (const l of (bb.expanded ? bb.lines : shownLines)) cols = Math.max(cols, Math.min(l.s.length, maxCols));
+      for (const l of (bb.expanded ? bb.lines : shownLines)) cols = Math.max(cols, Math.min(vlen(l.s), maxCols));
       if (bb.lines.length > 1) cols = Math.max(cols, Math.min(maxCols, 18));
       const rows = clamp(bb.expanded ? bb.lines.length : shownLines.length, 1, maxRows);
       return { cols, rows, maxRows, w: cols * colW(t) + dotsDx(bb), h: rows * CH * t };
@@ -728,26 +750,34 @@
         const edge = Math.min(1, fadeTop ? (cy / lh) * 1.2 : 1, fadeBot ? ((ih - cy) / lh) * 1.2 : 1);
         if (edge <= 0.02) continue;
         tctx.globalAlpha = clamp(edge, 0, 1);
-        for (let j = 0; j < line.s.length; j++) {
+        for (let j = 0, col = -1; j < line.s.length; j++) {
           const idx = line.start + j;
           if (idx >= shown) break;
+          col++;
           if (line.s[j] === ' ') {
             // A link's underline runs on under the spaces between its words.
-            if (R.md && (bb.sty?.[idx] ?? 0) & R.md.LINK && (bb.sty?.[idx + 1] ?? 0) & R.md.LINK) { tctx.fillStyle = TEXT_ACCENT; tctx.fillRect(j * cw, cy + lh * 0.36, cw, Math.max(1, t * 0.4)); }
+            if (R.md && (bb.sty?.[idx] ?? 0) & R.md.LINK && (bb.sty?.[idx + 1] ?? 0) & R.md.LINK) { tctx.fillStyle = TEXT_ACCENT; tctx.fillRect(col * cw, cy + lh * 0.36, cw, Math.max(1, t * 0.4)); }
             continue;
           }
           const em = emojiAt(line.s, j);
-          const ch = em ? em.cluster : line.s[j];
+          // A letter and the Thai marks on it are drawn together, so the font places the marks (each shows once it
+          // has streamed in).
+          let marks = 0;
+          if (!em) while (j + marks + 1 < line.s.length && idx + marks + 1 < shown && MARK.test(line.s[j + marks + 1])) marks++;
+          // ำ carries a circle that sits on the letter before it: drawn with that letter (it keeps its own column).
+          const am = !em && line.s[j + marks + 1] === 'ำ' && idx + marks + 1 < shown ? 1 : 0;
+          const ch = em ? em.cluster : line.s.slice(j, j + 1 + marks + am);
           // Each new letter lands white, then settles to the text colour (code and links in the accent). It lands
           // in place: a little hop per letter made the line being read shake while it streamed in.
           const st = ph ? 0 : bb.sty?.[idx] ?? 0, f = fontFor(st);
           if (f !== curFont) { tctx.font = f; curFont = f; }
-          const age = ph ? 9 : now - (bb.at[idx] ?? 0), x = j * cw + (em ? cw * 0.15 : 0), y = cy;
+          const age = ph ? 9 : now - (bb.at[idx + marks] ?? bb.at[idx] ?? 0), x = col * cw + (em ? cw * 0.15 : 0), y = cy;
           const marked = md && st & (md.CODE | md.LINK);
           tctx.fillStyle = age < 0.12 ? '#ffffff' : marked ? accent : ink;
           tctx.fillText(ch, x, y);
           if (md && st & md.LINK) tctx.fillRect(x, cy + lh * 0.36, cw, Math.max(1, t * 0.4));
-          if (em) j += em.n - 1;
+          if (em) { j += em.n - 1; col += em.n - 1; }
+          j += marks + am; col += am;
         }
       }
       tctx.globalAlpha = 1;
