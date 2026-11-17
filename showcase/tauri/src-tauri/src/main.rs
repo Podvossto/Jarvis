@@ -1108,9 +1108,11 @@ fn build_overlays(app: &AppHandle) -> tauri::Result<()> {
             .initialization_script(init);
         // Windows: Chromium's native window occlusion tracker reads a fullscreen transparent overlay (layered,
         // click-through) as fully occluded the moment another app sits over it, and then suspends rAF — the whole
-        // animation — mid-request. Turn the tracker off for this webview (the tauri default features stay listed).
+        // animation — mid-request. Turn the tracker off for this webview. GPU compositing of the transparent
+        // layered window also corrupts the whole screen with dither-static on some drivers (seen when the overlay
+        // is brought to the front), so its composite runs in software. The tauri default features stay listed.
         #[cfg(windows)]
-        let b = b.additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows");
+        let b = b.additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-gpu-compositing");
         let w = b.build()?;
         w.set_ignore_cursor_events(true)?;
         #[cfg(target_os = "linux")]
