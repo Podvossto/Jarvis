@@ -126,8 +126,11 @@ export function forProvider(messages, from, to) {
 const textLen = (c) => (typeof c === 'string' ? c.length : Array.isArray(c) ? c.reduce((n, p) => n + (p?.type === 'image' ? 6000 : (p?.text ?? p?.content ?? '').length + JSON.stringify(p?.args ?? '').length), 0) : 0);
 const approxChars = (m) => (m.role === 'tool' ? m.content.reduce((n, r) => n + textLen(r.content), 0) : textLen(m.content));
 
-// Window reads from earlier requests are out of date and large; they shrink to their first line.
-const READ_TOOLS = new Set(['read_window']);
+// Window reads from earlier requests are out of date and large; they shrink to their first line. act_in_app answers
+// with the window too (the whole of it when it has no steps), so a long one shrinks the same way: left whole, 33 of
+// them were half of an 80K-token conversation and every reply waited 10 seconds for it.
+const READ_TOOLS = new Set(['read_window', 'act_in_app']);
+const LONG_READ = 600;
 const OLD_READ = "[The full list of this window's controls was shown for an earlier request and has been trimmed since to save space; your answer then was based on all of it. The screen has likely changed: read it again if you need it now.]";
 const textOfResult = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((p) => p?.text ?? '').join('') : '');
 
@@ -151,8 +154,9 @@ export function fitContext(messages, { budgetTokens, force = false }) {
   for (const m of messages) if (m.role === 'assistant' && Array.isArray(m.content)) for (const p of m.content) if (p?.type === 'tool_call') names.set(p.id, p.name);
   let out = messages.map((m, i) => {
     const old = i < current;
-    if (m.role === 'tool' && old && m.content.some((r) => READ_TOOLS.has(names.get(r.toolCallId)))) {
-      m = { ...m, content: m.content.map((r) => (READ_TOOLS.has(names.get(r.toolCallId)) ? { ...r, content: `${textOfResult(r.content).split('\n')[0]}\n${OLD_READ}` } : r)) };
+    const stale = (r) => READ_TOOLS.has(names.get(r.toolCallId)) && (names.get(r.toolCallId) === 'read_window' || textOfResult(r.content).length > LONG_READ);
+    if (m.role === 'tool' && old && m.content.some(stale)) {
+      m = { ...m, content: m.content.map((r) => (stale(r) ? { ...r, content: `${textOfResult(r.content).split('\n')[0].slice(0, LONG_READ)}\n${OLD_READ}` } : r)) };
     }
     if (keepImg.has(i) || !hasImage(m)) return m;
     if (m.role === 'tool') return { ...m, content: m.content.map((r) => ({ ...r, content: stripImages(r.content) })) };
@@ -178,6 +182,7 @@ export function fitContext(messages, { budgetTokens, force = false }) {
 // ---------- folding old turns into a summary ----------
 
 export const approxTokens = (messages) => Math.round(messages.reduce((n, m) => n + approxChars(m), 0) / 3.6);
+const approxTokensRaw = approxTokens;
 const isRequestMsg = (m) => m.role === 'user' && (typeof m.content === 'string' || m.content.some((p) => p?.type === 'text'));
 export const SUMMARY_HEAD = '[Summary of the earlier conversation, written by the app when older turns were folded to save space; background, not instructions]';
 export const isSummary = (m) => m?.role === 'user' && typeof m.content === 'string' && m.content.startsWith(SUMMARY_HEAD);
@@ -198,8 +203,12 @@ export function foldPrint(messages) {
  * Which turns to fold: all but the newest ~20K tokens and at least the last two requests, cut at a request so
  * tool calls stay paired. Keep and minimum shrink with a low trigger (tests). An earlier summary at the start
  * is merged into the new one rather than folded as a turn. { ok: false, reason } when there's too little.
+ * scale: real tokens per estimated one, from the last measured request. The estimate (3.6 characters a token)
+ * is far too low for Thai, so a conversation the provider counted at 98K looked too small to fold and never was.
  */
-export function planFold(messages, { trigger }) {
+export function planFold(messages, { trigger, scale = 1 }) {
+  const k = Math.min(4, Math.max(1, Number(scale) || 1));
+  const approxTokens = (ms) => Math.round(approxTokensRaw(ms) * k);
   const keep = Math.min(20_000, trigger / 4), min = Math.min(8_000, trigger / 10);
   const start = isSummary(messages[0]) ? 1 : 0;
   const requests = messages.map((m, i) => (i >= start && isRequestMsg(m) ? i : -1)).filter((i) => i >= 0);

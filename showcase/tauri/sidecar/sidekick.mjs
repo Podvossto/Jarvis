@@ -763,10 +763,12 @@ let session = null;
 // The last conversation: it carries on until New conversation (old turns are folded into a summary, not cut off).
 // Requests (and reminders due at launch) wait for it, so they continue it instead of starting a new one.
 const resumed = loadLatestSession().then((s) => { if (s && !session) session = s; }).catch((e) => console.error('resume', e));
-const BUDGET_CAP = 120_000;
-// Tokens per request: kept tight for a quick reply out loud. The ChatGPT plan has its own windows (accountId).
+// Tokens per request: kept tight for a quick reply out loud. Anthropic keeps a long prompt cached for an hour, so a
+// big one stays quick; elsewhere the cache is short and a cold 80K prompt is a 10 second wait, so the cap is lower.
+const budgetCap = () => (config.provider === 'anthropic' ? 120_000 : 64_000);
+// The ChatGPT plan has its own windows (accountId).
 let credsAccountId;
-const requestBudget = () => Math.min(BUDGET_CAP, getContextWindow(config.model, { provider: config.provider, ...(agentRoute === 'api' && credsAccountId ? { accountId: credsAccountId } : {}) }) * 0.5);
+const requestBudget = () => Math.min(budgetCap(), getContextWindow(config.model, { provider: config.provider, ...(agentRoute === 'api' && credsAccountId ? { accountId: credsAccountId } : {}) }) * 0.5);
 // Claude Code's session for this conversation, so a rebuilt agent continues it instead of starting over.
 let ccResume = null;
 // The Claude Code process when Anthropic is signed in with Claude (else null: the API, with a key or another provider).
@@ -961,8 +963,12 @@ function maybeCompact() {
   const tokens = lastInput?.session === session.id ? lastInput.tokens : 0;
   const trigger = compactTrigger(requestBudget());
   if (tokens < trigger) return;
-  const plan = planFold(session.messages, { trigger });
-  logLine('compact_check', { session: session.id, tokens, measured: !!lastInput?.measured, trigger, ...(plan.ok ? { fold: plan.end - plan.start, foldTokens: plan.tokens } : { skip: plan.reason }) });
+  // What the provider counted against what we'd estimate for the same request (the tools' own text isn't in the
+  // estimate, so this leans high: it folds a little early rather than never).
+  const guess = approxTokens(fitContext(session.messages, { budgetTokens: Infinity })) + Math.round(system().length / 3.6);
+  const scale = lastInput?.measured && guess ? tokens / guess : 1;
+  const plan = planFold(session.messages, { trigger, scale });
+  logLine('compact_check', { session: session.id, tokens, measured: !!lastInput?.measured, trigger, scale: Math.round(scale * 100) / 100, ...(plan.ok ? { fold: plan.end - plan.start, foldTokens: plan.tokens } : { skip: plan.reason }) });
   if (!plan.ok) return;
   const s = session, t0 = Date.now();
   compacting = (async () => {
