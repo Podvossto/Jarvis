@@ -2342,7 +2342,7 @@ async function quickClick(text) {
     await hands('act', JSON.stringify({ steps: [{ do: 'click', id: c.id }], window: res.window.id }));
     logLine('quick_click', { hit: true, ms: Date.now() - t0 });
     quickNote = { at: Date.now(), note: `Just before this, they asked "${text.slice(0, 80)}" and the app itself clicked "${c.label}" in ${res.window.app} for them, without asking you: the screen has changed since.` };
-    say(/[ก-๛]/.test(text) ? `กด ${c.label} แล้ว` : `Clicked ${c.label}.`);
+    speakLine(/[ก-๛]/.test(text) ? `กด ${c.label} แล้ว` : `Clicked ${c.label}.`); // out loud too, when replies are
     return true;
   } catch (e) {
     logLine('quick_click', { hit: false, ms: Date.now() - t0, error: String(e?.message ?? e).slice(0, 160) });
