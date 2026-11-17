@@ -637,7 +637,14 @@
       if (dt > 0) { pointer.vx = (x - pointer.x) / dt; pointer.vy = (y - pointer.y) / dt; }
       pointer.x = x; pointer.y = y;
     };
-    const frame = (now) => {
+    // One bad frame must not stop every frame after it: a plugin that threw once left the character frozen on
+    // screen for good while the rest of the app carried on. The first error is logged; the loop goes on.
+    let threw = false;
+    function frame(now) {
+      try { step(now); }
+      catch (e) { if (!threw) { threw = true; console.error('frame', e); } if (!nap) requestAnimationFrame(frame); }
+    }
+    const step = (now) => {
       // Everyone gone: nothing to draw, so the canvas is cleared once and only the bookkeeping (timers,
       // closing bubbles) ticks, ten times a second, off the display clock. A host message wakes it at once.
       const gone = list.length > 0 && list.every((o) => o.c.gone && !o.c.mover.dragging);

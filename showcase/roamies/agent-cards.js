@@ -210,7 +210,8 @@
     const { over, update, quiet, extent } = p;
     p.quiet = () => !!quiet?.() && !trail.open && !tasks.open;
     p.extent = () => {
-      const e = extent?.(), t = shown() ? trail.box() : null, u = shown() ? tasks.box() : null, c = shown() ? clock.box() : null;
+      let e = extent?.(); // reassigned below: as a const this threw on the first task, and the frame loop died with it
+      const t = shown() ? trail.box() : null, u = shown() ? tasks.box() : null, c = shown() ? clock.box() : null;
       for (const b of [t, u, c]) {
         if (!b) continue;
         e ? (e = [Math.min(e[0], b[0]), Math.min(e[1], b[1]), Math.max(e[2], b[2]), Math.max(e[3], b[3])]) : (e = b);
