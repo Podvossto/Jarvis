@@ -12,6 +12,7 @@ import { parseSipsSize, readProblem, rematch, sameBounds, shotFits, shotMap, sho
 import { ASK, BLOCK, checkDrawAction, checkFetch, checkOpen, checkRead, checkWrite, classifyCommand, isRiskyClick, isYes, riskyKind } from './safety.mjs';
 import { CARDS, DrawArgs, LIMITS, checkDraw, createParts, createPhotos, describeParts, faviconFor, linkCallouts, pickTextMatch, quizNote, resolveTargets } from './draw.mjs';
 import { plain } from './intro.mjs';
+import { createGeocoder, createStyles, isRoadMap, roadMapPayload } from './roadmap.mjs';
 import { linuxSession, seesPointer } from './platform.mjs';
 import { cleanFact } from './brain.mjs';
 import { addCommitment, addFact, forgetFact, getCommitment, parseDue, parseRepeat, repeatLabel, updateCommitment } from './store.mjs';
@@ -230,7 +231,7 @@ export function sideSearchFor(route) {
 // Every request and redirect hop of web_fetch goes through safety.mjs, by name and by the addresses it resolves to.
 export const guardFetch = async (url) => { const v = await checkFetch(url); return v.level === BLOCK ? `Blocked for safety: ${v.reason}` : null; };
 
-export function createTools({ allowActions, ui, ask, openUrl, onCommitments, focus = null, firedReminders = () => [], showList, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: 'Roamies isn\'t running.' }), workdir = HOME, own = null, sideSearch = async () => null, pointScale = () => 'pixels', announce = () => {} }) {
+export function createTools({ allowActions, ui, ask, openUrl, onCommitments, focus = null, firedReminders = () => [], showList, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: 'Roamies isn\'t running.' }), workdir = HOME, own = null, sideSearch = async () => null, pointScale = () => 'pixels', announce = () => {}, roadMaps = null }) {
   // Relative paths (and run_command) start in workdir: the home folder for the chat, its own folder for an agent.
   const at = (p) => { const s = String(p ?? ''); return /^~(?=$|\/|\\)/.test(s) || path.isAbsolute(s) || /^[a-z]:[\\/]/i.test(s) ? s : path.join(workdir, s); };
   const where = workdir === HOME ? "the user's home folder" : `its working folder (${workdir})`;
@@ -393,6 +394,8 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, foc
   const parts = createParts();
   // Pictures looked at with see_photo: a photo's labels are only drawn on one of these.
   const photos = createPhotos();
+  // Road maps: place names (one lookup a second, each kept) and the inked style, shared by every map this session.
+  const maps = roadMaps ?? { geocoder: createGeocoder(), styles: createStyles() };
   const buttons = new Map(); // part id → the button's action, for when it's clicked
   const quizzes = new Map(); // part id → the quiz drawn there, to score what was clicked
   // Parts of drawings that go by themselves (the tour, the setup showcase): about no window, so switching windows keeps them.
@@ -593,6 +596,12 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, foc
     await Promise.all(marks.map(async (m) => {
       if (m.kind === 'photo') {
         try { Object.assign(m, await photos.get(m)); } catch (e) { m.missing = true; notes.push(`No photo for ${m.query ?? 'that link'} (${e.message}); drew its frame and caption only.`); }
+      } else if (m.kind === 'map' && isRoadMap(m)) {
+        // A place nobody knows throws (the model can fix it); no connection gives a card that says so, and a note.
+        const { found = [], ...road } = await roadMapPayload(m, maps);
+        m.road = road;
+        if (road.offline) notes.push(`The road map did not load: ${road.offline}. The card says the map couldn't load; tell them plainly, and don't describe what it would have shown.`);
+        else if (found.length) notes.push(`On the map: ${found.join('; ')}.`);
       } else if (m.kind === 'sources' || m.sources?.length) {
         m.sources = await Promise.all(m.sources.map(async (x) => ({ ...x, icon: checkDrawAction({ kind: 'favicon', url: x.url }).level === BLOCK ? null : await faviconFor(x.url).catch(() => null) })));
       }
@@ -868,7 +877,7 @@ Explanations that a picture makes clearer go on cards beside the window (tie con
 photo (query: a thing with a Wikipedia page, or url; text = caption). To name its parts add labels [{text, x, y}], x and y as fractions of the picture from its top left (0 to 1): only after see_photo has shown you that same picture, never from memory.
 Numbers: chart (chart: {type, title, x: {categories, label, unit, time}, y: {label, unit}, series: [{name, data, tone}]}) draws a real chart with axes, units and a legend, the pick when the numbers deserve axes (a trend, many values, or they ask for a chart or graph). data: one number per category, or [x, y] pairs without categories. By the question: compare categories, bar (stacked: true) or hbar for long names; a trend over time, line or area; how one thing goes with another, scatter (pairs); a spread, histogram (series values: the raw numbers) or box (a series per group); shares of a whole, pie or donut (slices [{name, value}]); several measures of 2 or 3 things, radar; a value across two categories, heatmap (grid {x, y, z: a row per y}). Series can take err (± per value) for error bars, axis: 'right' for a second measure (y2 names it), as: 'line' in a bar chart; lines [{y or x, text}] marks a target or average. bars (bars [{label, value, tone}], unit) is the quick sketch comparing a few amounts; graph (x_range, y_range, plots [{points, tone, label}], dots [{x, y, label}]) sketches curves and change without axes; timeline (events [{when, text}]) for dates. table (columns [headings], rows [[one cell per column]], up to ${LIMITS.columns} by ${LIMITS.rows}) compares things side by side: the first column names each row, cells stay short, and a cell of exactly "yes" or "no" is drawn as a tick or a cross.
 flow (nodes [{id, text, shape: box|round|diamond, tone}], links [{from, to, label, flow}] by node id, dir: down|right) for a process, cause and effect or a decision: round for a start or an end, diamond for a question, flow: true runs moving dots along a link (what travels: data, blood, current), animate: true on the flow runs them along every link. Up to ${LIMITS.nodes} nodes, a few words each; it lays itself out.
-map (region: world, a continent, or country names with commas between; shade [{name, tone}] colours countries in; pins [{name, lat, lon}]; routes [{from, to}] between pins by name). Country outlines only, no streets: cities, states and very small countries have no outline, so mark them with pins. Without region it fits what is shaded and pinned.
+map (region: world, a continent, or country names with commas between; shade [{name, tone}] colours countries in; pins [{name, lat, lon}]; routes [{from, to}] lines between pins by name; without region it fits what is shaded and pinned). For a town, a province or streets add place (a name or "lat,lon") and zoom (country|province|city|district|street): a real road map, where pins can take place instead of lat, lon and shade takes Thai provinces.
 math (steps [{tex, note}]) writes worked maths one step at a time. tex: one line of LaTeX per step (\\frac{a}{b}, \\sqrt{x}, x^{2}, x_{1}, \\left( \\right), \\text{words}, Greek, \\times \\cdot \\pm \\le \\ne \\approx \\pi \\infty; no \\begin, & or \\\\ line breaks); note: a few plain words on what changed. geometry (vertices [{id, x, y}] in your own units with y up, lines [{from, to, label, dash}], angles [{at, from, to, label}] with at the corner, circles [{at, r, label}]) for triangles, circles and angles.
 figure (title, figure {view: [w, h], parts: [{id, label, tone, fill, shapes}]}) draws a detailed picture of a thing's named parts (a cross-section, an organ, a machine, a circuit), 3 to 15 parts of a few shapes each, in view units, y down: path d, circle cx cy r, ellipse cx cy rx ry, rect x y w h, line x1 y1 x2 y2, polyline or polygon points, text x y text; tone and fill: a tone, dim, deep or none. Then in each later beat a callout (name: a part's id) points at that part while its say line explains it; a callout without name names every part.
 molecule (smiles, label) for chemistry. model (parts [{shape: box|sphere|cylinder|cone|torus, at [x,y,z], size [x,y,z], rot [deg x,y,z], tone, label, motion}] within about -1 to 1, title) for objects and machines. motion {do: spin|orbit|slide|pulse, axis: x|y|z, around [x,y,z], to [x,y,z], secs} makes a part move to show how the thing works: slide goes from at to "to" and back (a piston), orbit circles the point "around" (a planet, a crank pin), spin turns it in place (a round part spinning on its own axis looks still, so spin a box or orbit one round it), pulse swells and shrinks (a heart).

@@ -1750,10 +1750,109 @@
     touch(1);
   }
 
+  // ---------------------------------------------------------------- road maps: MapLibre in a sandboxed frame
+  // The sidecar sends the inked style, the view and what goes on top (roadmap.mjs). MapLibre (vendored by build.sh into
+  // roamies/vendor, fetched once, only when a road map opens) runs in an opaque-origin frame whose CSP lets it reach
+  // the map hosts below and nothing else: no app, no files, no other sites. Keep MAP_HOSTS in step with safety.mjs.
+  const MAP_HOSTS = ['https://tiles.openfreemap.org'];
+  const MAP_CSP = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: ${MAP_HOSTS.join(' ')}; connect-src ${MAP_HOSTS.join(' ')}; worker-src blob:; child-src blob:; font-src data:`;
+  let mapLib = null;
+  const mapLibrary = () => (mapLib ??= Promise.all(['js', 'css'].map((x) => fetch(`roamies/vendor/maplibre-gl.${x}`).then((r) => (r.ok ? r.text() : Promise.reject(new Error(r.status))))))
+    .catch((e) => { mapLib = null; throw e; }));
+  // Runs inside the frame: builds the map, draws the provinces, pins and lines on it, and tells the card whether it
+  // loaded (a style without a single tile is no map: offline, or the host blocked).
+  const MAP_BOOT = `(() => {
+  const C = JSON.parse(document.getElementById('cfg').textContent), say = (k, why = '') => parent.postMessage({ roadmap: k, why }, '*');
+  let map, tiles = 0, done = false;
+  const end = (k, why) => { if (!done) { done = true; say(k, why); } };
+  setTimeout(() => (tiles ? end('ok') : end('fail', 'offline')), 15000);
+  // The frame opens hidden and is sized as the card opens: the map is made once it has its real size (fitted to a
+  // 0 × 0 box, a province came out a third of the card), then follows the card's resizes.
+  const box = document.getElementById('m');
+  new ResizeObserver(() => { if (map) map.resize(); else if (box.clientWidth > 40 && box.clientHeight > 40) start(); }).observe(box);
+  function start() {
+    try {
+      map = new maplibregl.Map({ container: box, style: C.style, attributionControl: false, dragRotate: false, pitchWithRotate: false, maxPitch: 0, fadeDuration: 0,
+        ...(C.view.bounds ? { bounds: C.view.bounds, fitBoundsOptions: { padding: 30, maxZoom: 16 } } : { center: C.view.center, zoom: C.view.zoom }) });
+    } catch (e) { return end('fail', 'webgl'); }
+    map.touchZoomRotate.disableRotation();
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+    // Always shown, as the licences ask (the same words OpenFreeMap's tiles carry, so they show once), and the
+    // provinces' source when one is shaded.
+    const credit = ['<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> <a href="https://www.openmaptiles.org/" target="_blank">&copy; OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>'];
+    if (C.areas.length) credit.push('Provinces: <a href="https://www.geoboundaries.org" target="_blank">geoBoundaries</a> (ODbL)');
+    map.addControl(new maplibregl.AttributionControl({ compact: false, customAttribution: credit }), 'bottom-right');
+    map.on('sourcedata', (e) => { if (e.tile && !['areas', 'lines', 'pins'].includes(e.sourceId)) tiles++; });
+    map.on('idle', () => (tiles ? end('ok') : end('fail', 'offline')));
+    map.on('load', () => {
+      const fc = (features) => ({ type: 'FeatureCollection', features });
+      const font = ['Noto Sans Bold'];
+      map.addSource('areas', { type: 'geojson', data: fc(C.areas.map((a) => ({ type: 'Feature', properties: { name: a.name, c: a.color }, geometry: { type: 'MultiPolygon', coordinates: a.rings.map((r) => [r]) } }))) });
+      map.addLayer({ id: 'area-fill', type: 'fill', source: 'areas', paint: { 'fill-color': ['get', 'c'], 'fill-opacity': 0.13 } });
+      map.addLayer({ id: 'area-line', type: 'line', source: 'areas', paint: { 'line-color': ['get', 'c'], 'line-width': 2.2, 'line-blur': 0.6 } });
+      map.addSource('lines', { type: 'geojson', data: fc(C.routes.map((r) => ({ type: 'Feature', properties: { c: r.color }, geometry: { type: 'LineString', coordinates: [r.from, r.to] } }))) });
+      map.addLayer({ id: 'line-glow', type: 'line', source: 'lines', paint: { 'line-color': ['get', 'c'], 'line-width': 7, 'line-opacity': 0.25, 'line-blur': 3 } });
+      map.addLayer({ id: 'line', type: 'line', source: 'lines', layout: { 'line-cap': 'round' }, paint: { 'line-color': ['get', 'c'], 'line-width': 2.6 } });
+      map.addSource('pins', { type: 'geojson', data: fc(C.pins.map((p) => ({ type: 'Feature', properties: { name: p.name }, geometry: { type: 'Point', coordinates: [p.lon, p.lat] } }))) });
+      map.addLayer({ id: 'pin', type: 'circle', source: 'pins', paint: { 'circle-radius': 6, 'circle-color': '#e6fffa', 'circle-stroke-color': '#032722', 'circle-stroke-width': 3 } });
+      map.addLayer({ id: 'pin-name', type: 'symbol', source: 'pins', layout: { 'text-field': ['get', 'name'], 'text-font': font, 'text-size': 13, 'text-offset': [0, 1.2], 'text-anchor': 'top', 'text-allow-overlap': true },
+        paint: { 'text-color': '#ffffff', 'text-halo-color': '#051214', 'text-halo-width': 2 } });
+    });
+  }
+})();`;
+  async function drawRoadMap(m) {
+    const W = 560, H = 26 + 400, R0 = m.road;
+    let why = R0.offline ? 'offline' : '', frame = null;
+    if (!why) {
+      const lib = await mapLibrary().catch(() => null);
+      if (!lib) why = 'missing';
+      else {
+        // The frame's own data, in a script element that can't end early (no "<" left in it).
+        const cfg = JSON.stringify({ style: R0.style, view: R0.view, pins: R0.pins, routes: R0.routes.map((r) => ({ ...r, color: tone(r.tone) })), areas: R0.areas.map((a) => ({ ...a, color: tone(a.tone) })) }).replace(/</g, '\\u003c');
+        frame = document.createElement('iframe');
+        frame.setAttribute('sandbox', 'allow-scripts');
+        frame.setAttribute('referrerpolicy', 'no-referrer');
+        frame.style.cssText = 'position:fixed;z-index:5;border:0;background:#061618;display:none;';
+        frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${MAP_CSP}"><style>${lib[1]}
+html,body,#m{margin:0;height:100%;background:#061618}.maplibregl-ctrl-attrib{background:rgba(6,22,24,.85)!important;color:#8ab8b0;font:10px ui-monospace,monospace}.maplibregl-ctrl-attrib a{color:#78ffe2}
+.maplibregl-ctrl-group{background:#0a2a2c}.maplibregl-ctrl-group button+button{border-top-color:#0e5c60}.maplibregl-ctrl button .maplibregl-ctrl-icon{filter:invert(1) sepia(1) hue-rotate(120deg)}</style></head><body><div id="m"></div><script>${lib[0]}</script><script type="application/json" id="cfg">${cfg}</script><script>${MAP_BOOT}</script></body></html>`;
+        m.iframe = frame;
+        const heard = (e) => {
+          if (e.source !== frame.contentWindow || !e.data || typeof e.data.roadmap !== 'string') return;
+          if (e.data.roadmap === 'fail') { why = e.data.why === 'webgl' ? 'webgl' : 'offline'; frame.remove(); touch(); }
+          removeEventListener('message', heard);
+        };
+        addEventListener('message', heard);
+        document.body.appendChild(frame);
+      }
+    }
+    const SAY = { offline: ['the map couldn’t load', 'no connection to the map server'], webgl: ['the map couldn’t load', 'this screen can’t draw it (no WebGL)'], missing: ['the map couldn’t load', 'its map engine is missing from this build'] };
+    const c = await card(m, W, H, function (b, l, t, x, y) {
+      const cw = this.cw ?? W, ch = this.ch ?? H;
+      b.fillStyle = '#061618'; b.fillRect(x + 2, y + 1, cw - 4, ch - 26 - 3);
+      if (why) {
+        if (frame) frame.style.display = 'none';
+        typed(b, SAY[why][0], x + cw / 2, y + (ch - 26) / 2 - 6, `600 13px ${MONO}`, TEXT, 1, { anchor: 'middle' });
+        typed(b, SAY[why][1], x + cw / 2, y + (ch - 26) / 2 + 14, SMALL, DIM, 1, { anchor: 'middle' });
+        return;
+      }
+      // The frame rides the card, like the html card's.
+      const k = this.k ?? 1, ox = this.ox ?? 0, oy = this.oy ?? 0;
+      frame.style.display = 'block';
+      frame.style.left = `${Math.round(ox + (x + 2 - ox) * k)}px`;
+      frame.style.top = `${Math.round(oy + (y + 1 - oy) * k)}px`;
+      frame.style.width = `${Math.max(40, Math.round((cw - 4) * k))}px`;
+      frame.style.height = `${Math.max(40, Math.round((ch - 26 - 19) * k))}px`;
+    }, { title: m.title || m.place || 'map' });
+    sfx('scan');
+    return c;
+  }
+
   // ---------------------------------------------------------------- maps: country outlines (world.js), pins and routes
   // The sidecar sends the view (west, south, east, north) and which countries to colour in, by their place in
   // world.js. Longitudes are squeezed by the view's latitude so shapes look right; no streets, no terrain.
   async function drawMap(m) {
+    if (m.road) return drawRoadMap(m);
     const world = R.world, [vw, vs, ve, vn] = m.view, lon0 = (vw + ve) / 2, lat0 = (vs + vn) / 2, kx = Math.max(0.3, Math.cos((lat0 * Math.PI) / 180));
     const PW = Math.max(0.5, (ve - vw) * kx), PH = Math.max(0.5, vn - vs), X0 = 12, Y0 = 10, NAMEF = `600 11px ${MONO}`;
     // 420 wide for most places, wider for a wide one (the world, Russia); a tall one (Chile, Norway) is narrower
