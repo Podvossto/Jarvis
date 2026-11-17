@@ -41,12 +41,13 @@ assert.ok(webCase && !/panel\(\)\?\.open/.test(webCase), 'a web lookup does not 
 assert.match(side, /Before you call draw, write one short line first: the answer to anything they said or asked besides the drawing/, 'a line comes before the drawing');
 // Knowing when to draw: the prompt picks a card by the kind of question, and says what stays plain speech.
 const show = side.split('\n').find((l) => l.startsWith("Show, don't just tell."));
-for (const [ask, card] of [['How something works or happens', /a model with moving parts for a physical thing[^.]*; a flow for a process/], ['Comparing two or more things', /table/], ['How many, how much', /chart \(bar to compare, line for a change over time\)/], ['Where a place is', /map/], ['When, in what order', /timeline/],
-  ['Solving or working out maths', /math, a step per line \(geometry for a figure/], ['The parts of a thing', /see_photo, then a photo with labels/], ['"Test me" or "quiz me"', /quiz/]]) {
+for (const [ask, card] of [['How something works or happens', /a model with moving parts for a physical thing[^.]*; a flow for a process/], ['Comparing two or more things', /table/], ['How many, how much', /chart, its type picked by the question/], ['Where a place is', /map/], ['When, in what order', /timeline/],
+  ['Solving or working out maths', /math, a step per line \(geometry for a figure/], ['The parts of a thing', /see_photo, then a photo with labels \(a figure when no photo shows them\)/], ['"Test me" or "quiz me"', /quiz/]]) {
   const at = show.indexOf(ask);
   assert.ok(at >= 0, `the prompt covers: ${ask}`);
   assert.match(show.slice(at, at + 260), card, `${ask}: names its card`);
 }
+assert.match(show, /a figure for what a thing is made of inside \([^)]*\), a callout per beat on each part as you name it/, 'a figure for the inside of a thing, its parts called out one at a time');
 assert.match(show, /draw it without being asked/, 'explaining draws by itself');
 assert.match(show, /Don't draw for a quick fact[^.]*, an opinion or advice, small talk, a yes or no, anything they asked for in one line or one sentence, or when they say not to: those are just said\./, 'what stays plain speech');
 // Regression: the voice style said explanations are "spoken, not put on screen", which argued against drawing them.
@@ -60,7 +61,7 @@ assert.equal(side.split('Amounts, a comparison, a place, dates, a process and ma
 assert.match(side, /A count or total gathered over several pages, files or results: note each one's count in a few words as you go[^\n]*check the total you lead with against the items you then name\./, 'totals are tallied before they are stated');
 // The draw tool spells out every card it can make, and that labels need a look at the picture first.
 const drawText = tools.slice(tools.indexOf("name: 'draw',"), tools.indexOf("name: 'see_photo'"));
-for (const k of ['chart (chart: {type: \'line\' or \'bar\', title, x: {categories, label, unit}', 'bars (bars [{label, value, tone}], unit)', 'table (columns [headings], rows [[one cell per column]]', 'flow (nodes [{id, text, shape: box|round|diamond, tone}], links [{from, to, label, flow}]', 'map (region:', 'math (steps [{tex, note}])',
+for (const k of ['chart (chart: {type, title, x: {categories, label, unit, time}', 'figure (title, figure {view: [w, h], parts: [{id, label, tone, fill, shapes}]})', 'callout (name: a part\'s id)','bars (bars [{label, value, tone}], unit)', 'table (columns [headings], rows [[one cell per column]]', 'flow (nodes [{id, text, shape: box|round|diamond, tone}], links [{from, to, label, flow}]', 'map (region:', 'math (steps [{tex, note}])',
   'geometry (vertices [{id, x, y}]', 'quiz (questions [{text, options: 2 to 4, answer: the right option word for word, explain}]', 'motion {do: spin|orbit|slide|pulse', 'labels [{text, x, y}]'])
   assert.ok(drawText.includes(k), `the draw tool describes: ${k}`);
 assert.match(drawText, /only after see_photo has shown you that same picture/, 'labels come after a look');
