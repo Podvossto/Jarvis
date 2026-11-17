@@ -187,7 +187,7 @@
   function render() {
     raf = 0;
     const t = now();
-    for (let i = marks.length - 1; i >= 0; i--) if (!marks[i].alive) marks.splice(i, 1);
+    for (let i = marks.length - 1; i >= 0; i--) if (!marks[i].alive) { marks[i].iframe?.remove?.(); marks.splice(i, 1); }
     if (!marks.length) { if (alloc) freeCanvas(); return; }
     if (!alloc) allocate();
     const full = t < until || !!drag || !!sizing || !lastU, live = full ? [] : marks.filter((m) => m.live?.(t));
@@ -643,7 +643,9 @@
       [x, y] = roomFor(Math.round(w * k), Math.round(h * k), m.part);
     }
     const bar = o.bar === false ? 0 : 26;
-    const c = add({ z: 2, part: m.part, card: true, kind: m.kind, cw: 0, ch: 0, p: 0, done: 0, w, h, ox: x, oy: y, k, deep, sy: 0, scrollMax: Math.max(0, full - h), color: tone(m.tone), live: o.live, box: () => [x - 4, y - 4, w + 8, h + 14],
+    // A card that carries a live frame (html, road map) owns it: closing the card, by its × or any other way, takes
+    // the frame with it. It used to stay on the spec, so the × closed the card and left the page floating there.
+    const c = add({ z: 2, part: m.part, card: true, kind: m.kind, iframe: m.iframe, cw: 0, ch: 0, p: 0, done: 0, w, h, ox: x, oy: y, k, deep, sy: 0, scrollMax: Math.max(0, full - h), color: tone(m.tone), live: o.live, box: () => [x - 4, y - 4, w + 8, h + 14],
       draw(b, l, t) {
         if (this.cw < 4) return;
         chrome(b, x, y, this.cw, this.ch, { edge: o.edge ? colorOf(this, this.color) : ACC });
